@@ -1,0 +1,20 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  esphome-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate ESPHome external component config
+        run: |
+          docker run --rm \
+            -v "$PWD":/config \
+            -w /config \
+            esphome/esphome:2026.5.1 \
+            config tests/local-test.yaml

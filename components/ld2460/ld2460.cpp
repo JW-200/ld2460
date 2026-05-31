@@ -8,10 +8,6 @@
 #include <cmath>
 #include <cstdio>
 
-#ifdef USE_ESP32
-#include <driver/gpio.h>
-#endif
-
 namespace esphome {
 namespace ld2460 {
 
@@ -55,7 +51,6 @@ void LD2460Component::loop() {
   if (this->enable_reporting_ && this->total_bytes_ == 0 &&
       (!this->startup_commands_sent_ || now - this->last_command_ms_ >= 10000) && now > 2000) {
     this->select_next_baud_rate_();
-    this->log_uart_pin_levels_();
     this->send_startup_commands_();
     this->startup_commands_sent_ = true;
     this->last_command_ms_ = now;
@@ -82,7 +77,7 @@ void LD2460Component::loop() {
 
   if (this->total_bytes_ == 0 && this->no_data_log_interval_ms_ > 0 &&
       now - this->last_no_data_log_ms_ >= this->no_data_log_interval_ms_) {
-    ESP_LOGW(TAG, "No UART bytes received yet on RX. Check LD2460 TX -> ESP GPIO17/D7, common GND, power, and baud.");
+    ESP_LOGW(TAG, "No UART bytes received yet on RX. Check LD2460 TX -> ESP RX, common GND, power, and baud.");
     this->last_no_data_log_ms_ = now;
   }
 }
@@ -129,14 +124,6 @@ void LD2460Component::select_next_baud_rate_() {
 
   if (this->baud_scan_)
     this->baud_index_ = (this->baud_index_ + 1) % (sizeof(BAUD_RATES) / sizeof(BAUD_RATES[0]));
-}
-
-void LD2460Component::log_uart_pin_levels_() {
-#ifdef USE_ESP32
-  const int tx_level = gpio_get_level(GPIO_NUM_16);
-  const int rx_level = gpio_get_level(GPIO_NUM_17);
-  ESP_LOGI(TAG, "UART pin levels before command: GPIO16/D6/TX=%d, GPIO17/D7/RX=%d", tx_level, rx_level);
-#endif
 }
 
 void LD2460Component::set_target_x_sensor(uint8_t index, sensor::Sensor *target_x_sensor) {

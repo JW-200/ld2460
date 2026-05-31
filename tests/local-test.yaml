@@ -1,0 +1,51 @@
+substitutions:
+  device_name: ld2460-test
+  friendly_name: LD2460 Test
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [ld2460]
+
+uart:
+  id: uart_tracking
+  tx_pin: GPIO4
+  rx_pin: GPIO5
+  baud_rate: 115200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 4096
+
+ld2460:
+  id: tracking_radar
+  uart_id: uart_tracking
+  baud_scan: false
+  enable_reporting: true
+  presence:
+    id: tracking_presence
+    name: "Tracking Presence"
+  target_count:
+    id: tracking_target_count
+    name: "Tracking Target Count"
+  target_1:
+    x:
+      name: "Tracking Target 1 X"
+    y:
+      name: "Tracking Target 1 Y"
+    distance:
+      name: "Tracking Target 1 Distance"
+    angle:
+      name: "Tracking Target 1 Angle"

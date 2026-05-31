@@ -73,7 +73,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void send_startup_commands_();
   void send_enable_reporting_command_();
   void send_query_version_command_();
-  void log_uart_pin_levels_();
   void select_next_baud_rate_();
   void process_rx_buffer_();
   void process_report_frame_(const std::vector<uint8_t> &frame);

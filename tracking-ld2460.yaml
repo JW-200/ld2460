@@ -1,0 +1,132 @@
+substitutions:
+  # Package release. Keep this in sync with the Git tag and CHANGELOG.md.
+  ld2460_package_version: v0.1.0
+  ld2460_external_components_source: github://smarthomeshop/ld2460@v0.1.0
+  ld2460_bus_id: uart_tracking
+  ld2460_component_id: tracking_radar
+  ld2460_tx_pin: GPIO16
+  ld2460_rx_pin: GPIO17
+  ld2460_publish_interval: 500ms
+  ld2460_report_log_interval: 1s
+
+external_components:
+  - source: ${ld2460_external_components_source}
+    components: [ld2460]
+    refresh: 1d
+
+uart:
+  id: ${ld2460_bus_id}
+  tx_pin: ${ld2460_tx_pin}
+  rx_pin: ${ld2460_rx_pin}
+  baud_rate: 115200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 4096
+
+ld2460:
+  id: ${ld2460_component_id}
+  uart_id: ${ld2460_bus_id}
+  baud_scan: false
+  enable_reporting: true
+  flush_timeout: 100ms
+  max_buffer_size: 96
+  no_data_log_interval: 10s
+  publish_interval: ${ld2460_publish_interval}
+  report_log_interval: ${ld2460_report_log_interval}
+  presence:
+    id: tracking_presence
+    name: "Tracking Presence"
+  target_count:
+    id: tracking_target_count
+    name: "Tracking Target Count"
+  summary:
+    id: tracking_summary
+    name: "Tracking Targets"
+  firmware:
+    id: tracking_firmware
+    name: "Tracking Radar Firmware"
+  installation_mode:
+    id: tracking_installation_mode
+    name: "Tracking Radar Installation Mode"
+  raw:
+    id: tracking_raw_uart
+    name: "Tracking Raw UART"
+    disabled_by_default: true
+  byte_count:
+    id: tracking_uart_bytes
+    name: "Tracking UART Bytes"
+    disabled_by_default: true
+  target_1:
+    x:
+      id: tracking_target_1_x
+      name: "Tracking Target 1 X"
+    y:
+      id: tracking_target_1_y
+      name: "Tracking Target 1 Y"
+    distance:
+      id: tracking_target_1_distance
+      name: "Tracking Target 1 Distance"
+    angle:
+      id: tracking_target_1_angle
+      name: "Tracking Target 1 Angle"
+  target_2:
+    x:
+      id: tracking_target_2_x
+      name: "Tracking Target 2 X"
+    y:
+      id: tracking_target_2_y
+      name: "Tracking Target 2 Y"
+    distance:
+      id: tracking_target_2_distance
+      name: "Tracking Target 2 Distance"
+    angle:
+      id: tracking_target_2_angle
+      name: "Tracking Target 2 Angle"
+  target_3:
+    x:
+      id: tracking_target_3_x
+      name: "Tracking Target 3 X"
+    y:
+      id: tracking_target_3_y
+      name: "Tracking Target 3 Y"
+    distance:
+      id: tracking_target_3_distance
+      name: "Tracking Target 3 Distance"
+    angle:
+      id: tracking_target_3_angle
+      name: "Tracking Target 3 Angle"
+  target_4:
+    x:
+      id: tracking_target_4_x
+      name: "Tracking Target 4 X"
+      disabled_by_default: true
+    y:
+      id: tracking_target_4_y
+      name: "Tracking Target 4 Y"
+      disabled_by_default: true
+    distance:
+      id: tracking_target_4_distance
+      name: "Tracking Target 4 Distance"
+      disabled_by_default: true
+    angle:
+      id: tracking_target_4_angle
+      name: "Tracking Target 4 Angle"
+      disabled_by_default: true
+  target_5:
+    x:
+      id: tracking_target_5_x
+      name: "Tracking Target 5 X"
+      disabled_by_default: true
+    y:
+      id: tracking_target_5_y
+      name: "Tracking Target 5 Y"
+      disabled_by_default: true
+    distance:
+      id: tracking_target_5_distance
+      name: "Tracking Target 5 Distance"
+      disabled_by_default: true
+    angle:
+      id: tracking_target_5_angle
+      name: "Tracking Target 5 Angle"
+      disabled_by_default: true

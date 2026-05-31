@@ -1,7 +1,7 @@
 # ESPHome HLK-LD2460
 
-ESPHome external component and reusable package for the Hi-Link HLK-LD2460
-multi-target radar module.
+ESPHome external component and reusable packages for the Hi-Link HLK-LD2460
+multi-target radar module, maintained for SmartHomeShop firmware projects.
 
 The component reads the documented LD2460 UART2 reporting protocol and exposes
 decoded target data to Home Assistant. Detection radius, zones, sensitivity and
@@ -11,10 +11,13 @@ settings itself.
 ## Repository Structure
 
 ```text
-components/ld2460/  ESPHome external component implementation
-ld2460.yaml         Reusable ESPHome package
-example.yaml        Minimal copy-paste usage example
-CHANGELOG.md        Release notes
+components/ld2460/   ESPHome external component implementation
+ld2460.yaml          Reusable generic ESPHome package
+tracking-ld2460.yaml Reusable SmartHomeShop tracking package with stable IDs
+examples/            Product integration examples
+tests/               Local validation fixture
+example.yaml         Minimal copy-paste usage example
+CHANGELOG.md         Release notes
 ```
 
 The ESPHome component name is `ld2460`, so the package internally configures an
@@ -32,7 +35,7 @@ substitutions:
 
 packages:
   ld2460:
-    url: https://github.com/ciriousjoker/esphome_ld2460
+    url: https://github.com/smarthomeshop/ld2460
     ref: v0.1.0
     files:
       - ld2460.yaml
@@ -94,7 +97,7 @@ and are additionally limited by `ld2460_publish_interval`.
 | `ld2460_component_id`               | `ld2460_radar`                                | ESPHome LD2460 component id                         |
 | `ld2460_publish_interval`           | `500ms`                                       | Minimum interval between changed HA state publishes |
 | `ld2460_report_log_interval`        | `1s`                                          | Interval for readable target report log lines       |
-| `ld2460_external_components_source` | `github://ciriousjoker/esphome_ld2460@v0.1.0` | External component source                           |
+| `ld2460_external_components_source` | `github://smarthomeshop/ld2460@v0.1.0`        | External component source                           |
 
 ## Protocol Notes
 
@@ -127,3 +130,53 @@ uart:
 ld2460:
   uart_id: ld2460_bus
 ```
+
+## SmartHomeShop Tracking Package
+
+For SmartHomeShop products, prefer `tracking-ld2460.yaml`. It exposes stable
+internal IDs so firmware can swap LD2450 and LD2460 tracking packages without
+rewriting occupancy logic:
+
+- `tracking_presence`
+- `tracking_target_count`
+- `tracking_target_1_x`, `tracking_target_1_y`
+- `tracking_target_1_distance`, `tracking_target_1_angle`
+- same pattern for targets 2-5
+
+UltimateSensor V2 schematic mapping:
+
+```yaml
+substitutions:
+  ld2460_tx_pin: GPIO6 # ESP TX -> LD2460 RX
+  ld2460_rx_pin: GPIO5 # ESP RX <- LD2460 TX
+
+packages:
+  tracking:
+    url: https://github.com/smarthomeshop/ld2460
+    ref: v0.1.0
+    files:
+      - tracking-ld2460.yaml
+    refresh: 1d
+```
+
+UltimateSensor Mini V2 when LD2460 replaces LD2450 on the same UART pins:
+
+```yaml
+substitutions:
+  ld2460_tx_pin: GPIO18
+  ld2460_rx_pin: GPIO19
+
+packages:
+  tracking:
+    url: https://github.com/smarthomeshop/ld2460
+    ref: v0.1.0
+    files:
+      - tracking-ld2460.yaml
+    refresh: 1d
+```
+
+## Attribution
+
+This repository is based on
+[ciriousjoker/esphome_ld2460](https://github.com/ciriousjoker/esphome_ld2460)
+by Philipp Bauer and remains available under the MIT License.

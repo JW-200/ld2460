@@ -10,7 +10,7 @@ substitutions:
 
 packages:
   ld2460:
-    url: https://github.com/ciriousjoker/esphome_ld2460
+    url: https://github.com/smarthomeshop/ld2460
     ref: v0.1.0
     files:
       - ld2460.yaml
