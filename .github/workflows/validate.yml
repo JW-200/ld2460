@@ -13,8 +13,10 @@ jobs:
       - uses: actions/checkout@v5
       - name: Validate ESPHome external component config
         run: |
-          docker run --rm \
-            -v "$PWD":/config \
-            -w /config \
-            esphome/esphome:2026.5.1 \
-            config tests/local-test.yaml
+          for config in tests/local-test.yaml tests/package-merge-test.yaml; do
+            docker run --rm \
+              -v "$PWD":/config \
+              -w /config \
+              esphome/esphome:2026.5.1 \
+              config "$config"
+          done

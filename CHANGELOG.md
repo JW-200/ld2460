@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.1 - 2026-05-31
+
+- Defines package UART buses as lists so the package merges cleanly with firmware that already has another UART bus.
+- Corrects the UltimateSensor Mini V2 LD2460 example pin mapping to GPIO4/GPIO5.
+
 ## v0.1.0 - 2026-04-22
 
 - Initial release of the HLK-LD2460 external component.

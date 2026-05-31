@@ -1,0 +1,26 @@
+substitutions:
+  device_name: ld2460-package-merge-test
+  friendly_name: LD2460 Package Merge Test
+  ld2460_external_components_source: github://smarthomeshop/ld2460@main
+  ld2460_tx_pin: GPIO4
+  ld2460_rx_pin: GPIO5
+
+packages:
+  tracking: !include ../tracking-ld2460.yaml
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf
+
+logger:
+
+uart:
+  - id: uart_other_sensor
+    tx_pin: GPIO21
+    rx_pin: GPIO20
+    baud_rate: 115200

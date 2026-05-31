@@ -36,7 +36,7 @@ substitutions:
 packages:
   ld2460:
     url: https://github.com/smarthomeshop/ld2460
-    ref: v0.1.0
+    ref: v0.1.1
     files:
       - ld2460.yaml
     refresh: 1d
@@ -90,14 +90,14 @@ and are additionally limited by `ld2460_publish_interval`.
 
 | Substitution                        | Default                                       | Description                                         |
 | ----------------------------------- | --------------------------------------------- | --------------------------------------------------- |
-| `ld2460_package_version`            | `v0.1.0`                                      | Package release marker                              |
+| `ld2460_package_version`            | `v0.1.1`                                      | Package release marker                              |
 | `ld2460_tx_pin`                     | `GPIO16`                                      | ESP TX pin connected to LD2460 Rx2                  |
 | `ld2460_rx_pin`                     | `GPIO17`                                      | ESP RX pin connected to LD2460 Tx2                  |
 | `ld2460_bus_id`                     | `ld2460_bus`                                  | ESPHome UART bus id                                 |
 | `ld2460_component_id`               | `ld2460_radar`                                | ESPHome LD2460 component id                         |
 | `ld2460_publish_interval`           | `500ms`                                       | Minimum interval between changed HA state publishes |
 | `ld2460_report_log_interval`        | `1s`                                          | Interval for readable target report log lines       |
-| `ld2460_external_components_source` | `github://smarthomeshop/ld2460@v0.1.0`        | External component source                           |
+| `ld2460_external_components_source` | `github://smarthomeshop/ld2460@v0.1.1`        | External component source                           |
 
 ## Protocol Notes
 
@@ -153,7 +153,7 @@ substitutions:
 packages:
   tracking:
     url: https://github.com/smarthomeshop/ld2460
-    ref: v0.1.0
+    ref: v0.1.1
     files:
       - tracking-ld2460.yaml
     refresh: 1d
@@ -169,7 +169,7 @@ substitutions:
 packages:
   tracking:
     url: https://github.com/smarthomeshop/ld2460
-    ref: v0.1.0
+    ref: v0.1.1
     files:
       - tracking-ld2460.yaml
     refresh: 1d
