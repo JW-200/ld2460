@@ -101,6 +101,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   Target last_published_targets_[MAX_TARGETS]{};
   std::vector<uint8_t> rx_buffer_{};
   std::vector<uint8_t> frame_buffer_{};
+  std::string summary_buffer_{};
   uint32_t flush_timeout_ms_{100};
   uint16_t max_buffer_size_{48};
   uint32_t last_byte_ms_{0};

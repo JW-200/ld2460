@@ -21,6 +21,9 @@ static const size_t MAX_BYTES_PER_LOOP = 128;
 void LD2460Component::setup() {
   this->rx_buffer_.reserve(this->max_buffer_size_);
   this->frame_buffer_.reserve(this->max_buffer_size_);
+  // Reuse storage for continuous report summaries instead of allocating and
+  // freeing heap memory for every frame.
+  this->summary_buffer_.reserve(384);
 }
 
 void LD2460Component::dump_config() {
@@ -224,19 +227,37 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
   }
 
   Target targets[MAX_TARGETS]{};
-  std::string summary = "targets=" + std::to_string(target_count);
-
   for (uint8_t i = 0; i < target_count; i++) {
     const size_t offset = 7 + i * 4;
-    const int16_t raw_x = read_i16_le_(frame, offset);
-    const int16_t raw_y = read_i16_le_(frame, offset + 2);
-    const float x_m = raw_x / 10.0f;
-    const float y_m = raw_y / 10.0f;
+    targets[i].raw_x = read_i16_le_(frame, offset);
+    targets[i].raw_y = read_i16_le_(frame, offset + 2);
+  }
+
+  const uint32_t now = millis();
+  const bool should_log = now - this->last_report_log_ms_ >= this->report_log_interval_ms_;
+  const bool should_publish = this->target_state_changed_(targets, target_count) &&
+                              now - this->last_publish_ms_ >= this->publish_interval_ms_;
+
+  // Coordinate conversion, trigonometry, and summary formatting are only
+  // useful for a log or state publish. Most reports need only the raw values
+  // above to determine whether state changed.
+  if (!should_log && !should_publish) {
+    ESP_LOGVV(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
+    return;
+  }
+
+  auto &summary = this->summary_buffer_;
+  summary.clear();
+  char target_count_summary[16];
+  std::snprintf(target_count_summary, sizeof(target_count_summary), "targets=%u", target_count);
+  summary = target_count_summary;
+
+  for (uint8_t i = 0; i < target_count; i++) {
+    const float x_m = targets[i].raw_x / 10.0f;
+    const float y_m = targets[i].raw_y / 10.0f;
     const float distance_m = std::sqrt(x_m * x_m + y_m * y_m);
     const float angle_deg = std::atan2(x_m, y_m) * RAD_TO_DEG;
 
-    targets[i].raw_x = raw_x;
-    targets[i].raw_y = raw_y;
     targets[i].x_m = x_m;
     targets[i].y_m = y_m;
     targets[i].distance_m = distance_m;
@@ -248,16 +269,15 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
     summary += target_summary;
   }
 
-  const uint32_t now = millis();
-  if (now - this->last_report_log_ms_ >= this->report_log_interval_ms_) {
+  if (should_log) {
     ESP_LOGI(TAG, "LD2460 target report: %s", summary.c_str());
     this->last_report_log_ms_ = now;
-  } else {
-    ESP_LOGD(TAG, "LD2460 target report: %s", summary.c_str());
   }
-  ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
+  // Per-frame dumps are intentionally VERY_VERBOSE: DEBUG is ESPHome's common
+  // development level and logging every live report can monopolize the loop.
+  ESP_LOGVV(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
 
-  if (this->target_state_changed_(targets, target_count) && now - this->last_publish_ms_ >= this->publish_interval_ms_) {
+  if (should_publish) {
     this->publish_targets_(targets, target_count, summary);
     this->remember_published_targets_(targets, target_count);
 
@@ -325,17 +345,31 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
 }
 
 void LD2460Component::publish_targets_(const Target *targets, uint8_t target_count, const std::string &summary) {
-  if (this->presence_binary_sensor_ != nullptr)
-    this->presence_binary_sensor_->publish_state(target_count > 0);
+  const bool count_changed = !this->has_published_targets_ || target_count != this->last_published_target_count_;
 
-  if (this->target_count_sensor_ != nullptr)
-    this->target_count_sensor_->publish_state(target_count);
+  if (count_changed) {
+    if (this->presence_binary_sensor_ != nullptr)
+      this->presence_binary_sensor_->publish_state(target_count > 0);
+
+    if (this->target_count_sensor_ != nullptr)
+      this->target_count_sensor_->publish_state(target_count);
+  }
 
   if (this->summary_text_sensor_ != nullptr)
     this->summary_text_sensor_->publish_state(summary);
 
   for (uint8_t i = 0; i < MAX_TARGETS; i++) {
     const bool present = i < target_count;
+    const bool was_present = this->has_published_targets_ && i < this->last_published_target_count_;
+    const bool coordinates_changed =
+        present && (!was_present || targets[i].raw_x != this->last_published_targets_[i].raw_x ||
+                    targets[i].raw_y != this->last_published_targets_[i].raw_y);
+
+    // Publish only slots that appeared, moved, or disappeared. Movement of one
+    // target must not republish every other occupied target.
+    if (!coordinates_changed && !(was_present && !present))
+      continue;
+
     const float x = present ? targets[i].x_m : NAN;
     const float y = present ? targets[i].y_m : NAN;
     const float distance = present ? targets[i].distance_m : NAN;
@@ -432,27 +466,26 @@ const char *LD2460Component::installation_mode_to_string_(uint8_t mode) {
 }
 
 std::string LD2460Component::format_frame_(const std::vector<uint8_t> &bytes) {
-  std::string hex;
-  hex.reserve(bytes.size() * 3);
+  std::string output;
+  output.reserve(bytes.size() * 4 + 3);
 
   char byte_hex[3];
   for (size_t i = 0; i < bytes.size(); i++) {
     if (i != 0)
-      hex += ' ';
+      output += ' ';
     std::snprintf(byte_hex, sizeof(byte_hex), "%02X", bytes[i]);
-    hex += byte_hex;
+    output += byte_hex;
   }
 
-  std::string ascii;
-  ascii.reserve(bytes.size());
+  output += " | ";
   for (const auto byte : bytes) {
     if (std::isprint(static_cast<unsigned char>(byte)))
-      ascii += static_cast<char>(byte);
+      output += static_cast<char>(byte);
     else
-      ascii += '.';
+      output += '.';
   }
 
-  return hex + " | " + ascii;
+  return output;
 }
 
 }  // namespace ld2460
