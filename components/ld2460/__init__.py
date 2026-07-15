@@ -109,7 +109,8 @@ CONFIG_SCHEMA = cv.All(
             **{cv.Optional(target): TARGET_SCHEMA for target in CONF_TARGETS},
             cv.Optional(CONF_ENABLE_REPORTING, default=True): cv.boolean,
             cv.Optional(CONF_FLUSH_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_MAX_BUFFER_SIZE, default=48): cv.int_range(min=1, max=512),
+            # The shortest valid protocol frame is 11 bytes.
+            cv.Optional(CONF_MAX_BUFFER_SIZE, default=48): cv.int_range(min=11, max=512),
             cv.Optional(CONF_NO_DATA_LOG_INTERVAL, default="10s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_PUBLISH_INTERVAL, default="500ms"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_REPORT_LOG_INTERVAL, default="1s"): cv.positive_time_period_milliseconds,

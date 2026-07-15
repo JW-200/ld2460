@@ -14,8 +14,14 @@ namespace ld2460 {
 static const char *const TAG = "ld2460";
 static const uint32_t BAUD_RATES[] = {115200, 9600, 19200, 38400, 57600, 230400, 256000, 460800};
 static const float RAD_TO_DEG = 57.2957795131f;
+// Do not let a continuously busy UART monopolize ESPHome's main loop.  The
+// remaining bytes stay in the UART driver's ring buffer for the next loop.
+static const size_t MAX_BYTES_PER_LOOP = 128;
 
-void LD2460Component::setup() { this->rx_buffer_.reserve(this->max_buffer_size_); }
+void LD2460Component::setup() {
+  this->rx_buffer_.reserve(this->max_buffer_size_);
+  this->frame_buffer_.reserve(this->max_buffer_size_);
+}
 
 void LD2460Component::dump_config() {
   ESP_LOGCONFIG(TAG, "HLK-LD2460 raw UART reader:");
@@ -57,20 +63,26 @@ void LD2460Component::loop() {
   }
 
   uint8_t byte;
-  while (this->available() > 0) {
+  size_t bytes_read = 0;
+  while (bytes_read < MAX_BYTES_PER_LOOP && this->available() > 0) {
     if (!this->read_byte(&byte))
       break;
 
     this->rx_buffer_.push_back(byte);
+    bytes_read++;
     this->total_bytes_++;
     this->last_byte_ms_ = now;
 
-    this->process_rx_buffer_();
-
+    // Parse in batches instead of after every byte.  Besides doing less work,
+    // this keeps the vector at its reserved size during a UART burst.
     if (this->rx_buffer_.size() >= this->max_buffer_size_) {
-      this->flush_unparsed_buffer_();
+      this->process_rx_buffer_();
+      if (this->rx_buffer_.size() >= this->max_buffer_size_)
+        this->flush_unparsed_buffer_();
     }
   }
+
+  this->process_rx_buffer_();
 
   if (!this->rx_buffer_.empty() && now - this->last_byte_ms_ >= this->flush_timeout_ms_)
     this->flush_unparsed_buffer_();
@@ -167,8 +179,11 @@ void LD2460Component::process_rx_buffer_() {
     if (this->rx_buffer_.size() < frame_length)
       return;
 
-    const std::vector<uint8_t> frame(this->rx_buffer_.begin(), this->rx_buffer_.begin() + frame_length);
+    // Reuse one allocation for every frame.  Radar reports arrive continuously,
+    // so allocating and freeing a vector per report fragments a small MCU heap.
+    this->frame_buffer_.assign(this->rx_buffer_.begin(), this->rx_buffer_.begin() + frame_length);
     this->rx_buffer_.erase(this->rx_buffer_.begin(), this->rx_buffer_.begin() + frame_length);
+    const auto &frame = this->frame_buffer_;
 
     if (is_report_header_(frame)) {
       if (!has_report_footer_(frame)) {
