@@ -209,8 +209,11 @@ void LD2460Component::restore_reporting(bool enabled) {
 }
 
 void LD2460Component::set_config_value(uint8_t field, float value) {
-  if (!this->configuration_loaded_) {
-    ESP_LOGW(TAG, "Ignoring settings change until current LD2460 settings have been read.");
+  const bool installation_setting = field == 0 || field == 1;
+  const bool detection_setting = field >= 2 && field <= 4;
+  if ((installation_setting && !this->installation_parameters_response_received_) ||
+      (detection_setting && !this->detection_range_response_received_)) {
+    ESP_LOGW(TAG, "Ignoring settings change until its current LD2460 values have been read.");
     return;
   }
   if (this->settings_command_state_ != SettingsCommandState::IDLE) {
@@ -419,7 +422,8 @@ void LD2460Component::send_query_sensitivity_command_() {
 void LD2460Component::finish_metadata_queries_() {
   if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA ||
       !this->firmware_response_received_ || !this->installation_mode_response_received_ ||
-      !this->installation_parameters_response_received_ || !this->detection_range_response_received_ ||
+      !(this->installation_mode_ == 2 || this->installation_parameters_response_received_) ||
+      !this->detection_range_response_received_ ||
       !this->sensitivity_response_received_)
     return;
 
