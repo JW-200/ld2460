@@ -108,6 +108,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   };
 
   void send_startup_commands_();
+  void send_startup_queries_();
   void send_enable_reporting_command_(bool enabled = true);
   void send_query_version_command_();
   void send_query_installation_mode_command_();

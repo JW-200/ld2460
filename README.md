@@ -80,6 +80,7 @@ For a Seeed Studio XIAO ESP32-C6 example:
 - Target 1-5 distance
 - Target 1-5 angle
 - Reporting enable/disable switch
+- Radar sensitivity select (High, Medium, Low; firmware support required)
 - Diagnostic firmware and installation mode text sensors
 
 Home Assistant state updates are published only when the target state changes

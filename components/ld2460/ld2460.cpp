@@ -150,13 +150,21 @@ void LD2460Component::send_startup_commands_() {
     this->send_enable_reporting_command_(false);
   } else {
     this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
-    this->send_query_version_command_();
-    this->send_query_installation_mode_command_();
-    this->send_query_installation_parameters_command_();
-    this->send_query_detection_range_command_();
-    this->send_query_sensitivity_command_();
-    this->last_command_ms_ = millis();
+    this->send_startup_queries_();
   }
+}
+
+void LD2460Component::send_startup_queries_() {
+  if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA) {
+    ESP_LOGW(TAG, "Refusing LD2460 startup settings queries while reporting may be active.");
+    return;
+  }
+  this->send_query_version_command_();
+  this->send_query_installation_mode_command_();
+  this->send_query_installation_parameters_command_();
+  this->send_query_detection_range_command_();
+  this->send_query_sensitivity_command_();
+  this->last_command_ms_ = millis();
 }
 
 void LD2460Component::set_reporting(bool enabled) { this->send_enable_reporting_command_(enabled); }
@@ -378,7 +386,8 @@ void LD2460Component::send_query_sensitivity_command_() {
 void LD2460Component::finish_metadata_queries_() {
   if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA ||
       !this->firmware_response_received_ || !this->installation_mode_response_received_ ||
-      !this->installation_parameters_response_received_ || !this->detection_range_response_received_)
+      !this->installation_parameters_response_received_ || !this->detection_range_response_received_ ||
+      !this->sensitivity_response_received_)
     return;
 
   if (this->restore_reporting_after_metadata_) {
@@ -587,12 +596,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
 
         if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled) {
           this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
-          this->send_query_version_command_();
-          this->send_query_installation_mode_command_();
-          this->send_query_installation_parameters_command_();
-          this->send_query_detection_range_command_();
-          this->send_query_sensitivity_command_();
-          this->last_command_ms_ = millis();
+          this->send_startup_queries_();
         } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
           this->startup_command_state_ = StartupCommandState::COMPLETE;
         } else if (temporary_settings_disable) {
