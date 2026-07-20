@@ -25,8 +25,8 @@ void LD2460ReportingSwitch::write_state(bool state) {
 
 void LD2460ReportingSwitch::setup() {
   const auto restored_state = this->get_initial_state_with_restore_mode();
-  if (restored_state.has_value() && this->parent_ != nullptr)
-    this->parent_->restore_reporting(*restored_state);
+  if (this->parent_ != nullptr)
+    this->parent_->restore_reporting(restored_state.value_or(true));
 }
 
 void LD2460ConfigNumber::control(float value) {
@@ -188,12 +188,24 @@ void LD2460Component::send_startup_queries_() {
   this->last_command_ms_ = millis();
 }
 
-void LD2460Component::set_reporting(bool enabled) { this->send_enable_reporting_command_(enabled); }
+void LD2460Component::set_reporting(bool enabled) {
+  if (this->settings_command_state_ != SettingsCommandState::IDLE ||
+      (this->startup_command_state_ != StartupCommandState::IDLE &&
+       this->startup_command_state_ != StartupCommandState::COMPLETE)) {
+    ESP_LOGW(TAG, "Ignoring reporting change while an LD2460 transaction is active.");
+    if (this->reporting_switch_ != nullptr)
+      this->reporting_switch_->publish_state(this->requested_reporting_enabled_);
+    return;
+  }
+  this->requested_reporting_enabled_ = enabled;
+  this->send_enable_reporting_command_(enabled);
+}
 
 void LD2460Component::restore_reporting(bool enabled) {
+  this->requested_reporting_enabled_ = enabled;
   this->reporting_enabled_ = enabled;
   this->reporting_restore_pending_ = true;
-  this->set_reporting(enabled);
+  this->send_enable_reporting_command_(enabled);
 }
 
 void LD2460Component::set_config_value(uint8_t field, float value) {
@@ -595,11 +607,18 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
           this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled;
       const bool temporary_settings_disable =
           this->settings_command_state_ == SettingsCommandState::WAITING_FOR_DISABLE && !enabled;
+      const bool temporary_enable =
+          enabled && (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE ||
+                      this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE);
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
       if (success) {
         this->reporting_enabled_ = enabled;
         this->reporting_restore_pending_ = false;
-        if (this->reporting_switch_ != nullptr)
+        // A settings/metadata pause must not change the user-facing switch.
+        // It represents the requested reporting state, not a brief transport
+        // state used to make a command transaction reliable.
+        if (this->reporting_switch_ != nullptr && !temporary_startup_disable && !temporary_settings_disable &&
+            !temporary_enable)
           this->reporting_switch_->publish_state(enabled);
 
         if (!enabled && !temporary_startup_disable && !temporary_settings_disable)

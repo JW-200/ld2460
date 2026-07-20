@@ -179,6 +179,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool sensitivity_response_received_{false};
   bool configuration_loaded_{false};
   bool reporting_enabled_{true};
+  bool requested_reporting_enabled_{true};
   bool reporting_restore_pending_{false};
   bool restore_reporting_after_metadata_{true};
   bool restore_reporting_after_settings_{false};
