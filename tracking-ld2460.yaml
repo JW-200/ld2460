@@ -28,7 +28,6 @@ ld2460:
   id: ${ld2460_component_id}
   uart_id: ${ld2460_bus_id}
   baud_scan: false
-  enable_reporting: true
   flush_timeout: 100ms
   max_buffer_size: 96
   no_data_log_interval: 10s
@@ -43,6 +42,7 @@ ld2460:
   reporting:
     id: tracking_reporting
     name: "Tracking Reporting"
+    restore_mode: RESTORE_DEFAULT_ON
   summary:
     id: tracking_summary
     name: "Tracking Targets"

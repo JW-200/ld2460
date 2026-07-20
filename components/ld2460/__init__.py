@@ -23,7 +23,6 @@ LD2460Component = ld2460_ns.class_(
 LD2460ReportingSwitch = ld2460_ns.class_("LD2460ReportingSwitch", switch.Switch)
 
 CONF_BAUD_SCAN = "baud_scan"
-CONF_ENABLE_REPORTING = "enable_reporting"
 CONF_FLUSH_TIMEOUT = "flush_timeout"
 CONF_MAX_BUFFER_SIZE = "max_buffer_size"
 CONF_NO_DATA_LOG_INTERVAL = "no_data_log_interval"
@@ -97,9 +96,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_REPORTING): switch.switch_schema(
                 LD2460ReportingSwitch,
                 icon="mdi:radar",
-            ),
+            ).extend(cv.COMPONENT_SCHEMA),
             **{cv.Optional(target): TARGET_SCHEMA for target in CONF_TARGETS},
-            cv.Optional(CONF_ENABLE_REPORTING, default=True): cv.boolean,
             cv.Optional(CONF_FLUSH_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
             # The shortest valid protocol frame is 11 bytes.
             cv.Optional(CONF_MAX_BUFFER_SIZE, default=48): cv.int_range(min=11, max=512),
@@ -150,6 +148,7 @@ async def to_code(config):
 
     if reporting_config := config.get(CONF_REPORTING):
         reporting_switch = cg.new_Pvariable(reporting_config[CONF_ID])
+        await cg.register_component(reporting_switch, reporting_config)
         await switch.register_switch(reporting_switch, reporting_config)
         cg.add(reporting_switch.set_parent(var))
         cg.add(var.set_reporting_switch(reporting_switch))
@@ -178,7 +177,6 @@ async def to_code(config):
     cg.add(var.set_flush_timeout(config[CONF_FLUSH_TIMEOUT].total_milliseconds))
     cg.add(var.set_max_buffer_size(config[CONF_MAX_BUFFER_SIZE]))
     cg.add(var.set_baud_scan(config[CONF_BAUD_SCAN]))
-    cg.add(var.set_enable_reporting(config[CONF_ENABLE_REPORTING]))
     cg.add(var.set_no_data_log_interval(config[CONF_NO_DATA_LOG_INTERVAL].total_milliseconds))
     cg.add(var.set_publish_interval(config[CONF_PUBLISH_INTERVAL].total_milliseconds))
     cg.add(var.set_report_log_interval(config[CONF_REPORT_LOG_INTERVAL].total_milliseconds))

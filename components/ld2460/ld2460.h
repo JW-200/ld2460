@@ -16,9 +16,10 @@ namespace ld2460 {
 
 class LD2460Component;
 
-class LD2460ReportingSwitch : public switch_::Switch {
+class LD2460ReportingSwitch : public switch_::Switch, public Component {
  public:
   void set_parent(LD2460Component *parent) { this->parent_ = parent; }
+  void setup() override;
 
  protected:
   void write_state(bool state) override;
@@ -50,6 +51,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void set_target_count_sensor(sensor::Sensor *target_count_sensor) { this->target_count_sensor_ = target_count_sensor; }
   void set_reporting_switch(LD2460ReportingSwitch *reporting_switch) { this->reporting_switch_ = reporting_switch; }
   void set_reporting(bool enabled);
+  void restore_reporting(bool enabled);
   void set_target_x_sensor(uint8_t index, sensor::Sensor *target_x_sensor);
   void set_target_y_sensor(uint8_t index, sensor::Sensor *target_y_sensor);
   void set_target_distance_sensor(uint8_t index, sensor::Sensor *target_distance_sensor);
@@ -57,7 +59,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void set_baud_scan(bool baud_scan) { this->baud_scan_ = baud_scan; }
   void set_flush_timeout(uint32_t flush_timeout_ms) { this->flush_timeout_ms_ = flush_timeout_ms; }
   void set_max_buffer_size(uint16_t max_buffer_size) { this->max_buffer_size_ = max_buffer_size; }
-  void set_enable_reporting(bool enable_reporting) { this->enable_reporting_ = enable_reporting; }
   void set_no_data_log_interval(uint32_t no_data_log_interval_ms) {
     this->no_data_log_interval_ms_ = no_data_log_interval_ms;
   }
@@ -83,9 +84,19 @@ class LD2460Component : public Component, public uart::UARTDevice {
     float angle_deg{0.0f};
   };
 
+  enum class StartupCommandState : uint8_t {
+    IDLE,
+    WAITING_FOR_DISABLE,
+    WAITING_FOR_METADATA,
+    WAITING_FOR_ENABLE,
+    COMPLETE,
+  };
+
   void send_startup_commands_();
   void send_enable_reporting_command_(bool enabled = true);
   void send_query_version_command_();
+  void send_query_installation_mode_command_();
+  void finish_metadata_queries_();
   void select_next_baud_rate_();
   void process_rx_buffer_();
   void process_report_frame_(const std::vector<uint8_t> &frame);
@@ -127,9 +138,14 @@ class LD2460Component : public Component, public uart::UARTDevice {
   uint8_t last_published_target_count_{0};
   uint8_t baud_index_{0};
   bool baud_scan_{true};
-  bool enable_reporting_{true};
   bool startup_commands_sent_{false};
+  bool firmware_response_received_{false};
+  bool installation_mode_response_received_{false};
+  bool reporting_enabled_{true};
+  bool reporting_restore_pending_{false};
+  bool restore_reporting_after_metadata_{true};
   bool has_published_targets_{false};
+  StartupCommandState startup_command_state_{StartupCommandState::IDLE};
   uint32_t no_data_log_interval_ms_{10000};
 };
 

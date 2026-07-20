@@ -23,6 +23,12 @@ void LD2460ReportingSwitch::write_state(bool state) {
     this->parent_->set_reporting(state);
 }
 
+void LD2460ReportingSwitch::setup() {
+  const auto restored_state = this->get_initial_state_with_restore_mode();
+  if (restored_state.has_value() && this->parent_ != nullptr)
+    this->parent_->restore_reporting(*restored_state);
+}
+
 void LD2460Component::setup() {
   this->rx_buffer_.reserve(this->max_buffer_size_);
   this->frame_buffer_.reserve(this->max_buffer_size_);
@@ -36,7 +42,6 @@ void LD2460Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Flush timeout: %" PRIu32 " ms", this->flush_timeout_ms_);
   ESP_LOGCONFIG(TAG, "  Max buffer size: %u byte(s)", this->max_buffer_size_);
   ESP_LOGCONFIG(TAG, "  Baud scan: %s", YESNO(this->baud_scan_));
-  ESP_LOGCONFIG(TAG, "  Enable reporting on boot: %s", YESNO(this->enable_reporting_));
   ESP_LOGCONFIG(TAG, "  No-data log interval: %" PRIu32 " ms", this->no_data_log_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Publish interval: %" PRIu32 " ms", this->publish_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Report log interval: %" PRIu32 " ms", this->report_log_interval_ms_);
@@ -60,15 +65,22 @@ void LD2460Component::dump_config() {
 void LD2460Component::loop() {
   const uint32_t now = millis();
 
-  const bool first_startup_command = !this->startup_commands_sent_;
-  const bool retry_without_data = this->total_bytes_ == 0 && now - this->last_command_ms_ >= 10000;
-  if (this->enable_reporting_ && now > 2000 && (first_startup_command || retry_without_data)) {
-    // Keep the UART rate that is already receiving reports. Baud scanning is
+  if (now > 2000 && !this->startup_commands_sent_ && !this->reporting_restore_pending_) {
+    // Keep the UART rate that is already receiving reports; baud scanning is
     // only useful when there is no data at all.
     if (this->total_bytes_ == 0)
       this->select_next_baud_rate_();
     this->send_startup_commands_();
     this->startup_commands_sent_ = true;
+    this->last_command_ms_ = now;
+  }
+
+  // Never leave a radar with reporting disabled if a metadata reply is lost.
+  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA &&
+      now - this->last_command_ms_ >= 2000) {
+    ESP_LOGW(TAG, "Timed out waiting for LD2460 metadata; restoring reporting.");
+    this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
+    this->send_enable_reporting_command_(true);
     this->last_command_ms_ = now;
   }
 
@@ -105,18 +117,34 @@ void LD2460Component::loop() {
 }
 
 void LD2460Component::send_startup_commands_() {
-  this->send_enable_reporting_command_();
-  this->send_query_version_command_();
+  // The radar does not reliably answer metadata queries while live reporting
+  // is active. Stop reports first and restore them after the replies arrive.
+  this->restore_reporting_after_metadata_ = this->reporting_enabled_;
+  if (this->reporting_enabled_) {
+    this->startup_command_state_ = StartupCommandState::WAITING_FOR_DISABLE;
+    this->send_enable_reporting_command_(false);
+  } else {
+    this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
+    this->send_query_version_command_();
+    this->send_query_installation_mode_command_();
+    this->last_command_ms_ = millis();
+  }
 }
 
 void LD2460Component::set_reporting(bool enabled) { this->send_enable_reporting_command_(enabled); }
+
+void LD2460Component::restore_reporting(bool enabled) {
+  this->reporting_enabled_ = enabled;
+  this->reporting_restore_pending_ = true;
+  this->set_reporting(enabled);
+}
 
 void LD2460Component::send_enable_reporting_command_(bool enabled) {
   uint8_t command[] = {
       0xFD, 0xFC, 0xFB, 0xFA,  // Frame header
       0x06,                    // Open/close reporting function
       0x0C, 0x00,              // Total frame length, little endian
-      enabled ? 0x01 : 0x00,   // Enable/disable reporting
+      static_cast<uint8_t>(enabled ? 0x01 : 0x00),  // Enable/disable reporting
       0x04, 0x03, 0x02, 0x01   // Frame tail
   };
   this->write_array(command, sizeof(command));
@@ -135,6 +163,33 @@ void LD2460Component::send_query_version_command_() {
   this->write_array(QUERY_VERSION, sizeof(QUERY_VERSION));
   this->flush();
   ESP_LOGI(TAG, "Sent LD2460 query-version command.");
+}
+
+void LD2460Component::send_query_installation_mode_command_() {
+  static const uint8_t QUERY_INSTALLATION_MODE[] = {
+      0xFD, 0xFC, 0xFB, 0xFA,  // Frame header
+      0x0A,                    // Query installation mode
+      0x0C, 0x00,              // Total frame length, little endian
+      0x01,                    // Query payload
+      0x04, 0x03, 0x02, 0x01   // Frame tail
+  };
+  this->write_array(QUERY_INSTALLATION_MODE, sizeof(QUERY_INSTALLATION_MODE));
+  this->flush();
+  ESP_LOGI(TAG, "Sent LD2460 query-installation-mode command.");
+}
+
+void LD2460Component::finish_metadata_queries_() {
+  if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA ||
+      !this->firmware_response_received_ || !this->installation_mode_response_received_)
+    return;
+
+  if (this->restore_reporting_after_metadata_) {
+    this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
+    this->send_enable_reporting_command_(true);
+    this->last_command_ms_ = millis();
+  } else {
+    this->startup_command_state_ = StartupCommandState::COMPLETE;
+  }
 }
 
 void LD2460Component::select_next_baud_rate_() {
@@ -306,8 +361,21 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       const bool success = (result & 0x10) != 0;
       const bool enabled = (result & 0x01) != 0;
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
-      if (success && this->reporting_switch_ != nullptr)
-        this->reporting_switch_->publish_state(enabled);
+      if (success) {
+        this->reporting_enabled_ = enabled;
+        this->reporting_restore_pending_ = false;
+        if (this->reporting_switch_ != nullptr)
+          this->reporting_switch_->publish_state(enabled);
+
+        if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled) {
+          this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
+          this->send_query_version_command_();
+          this->send_query_installation_mode_command_();
+          this->last_command_ms_ = millis();
+        } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
+          this->startup_command_state_ = StartupCommandState::COMPLETE;
+        }
+      }
       break;
     }
     case 0x0A: {
@@ -317,6 +385,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       ESP_LOGI(TAG, "LD2460 installation mode: %s", mode);
       if (this->installation_mode_text_sensor_ != nullptr)
         this->installation_mode_text_sensor_->publish_state(mode);
+      this->installation_mode_response_received_ = true;
+      this->finish_metadata_queries_();
       break;
     }
     case 0x0B: {
@@ -335,6 +405,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         this->firmware_text_sensor_->publish_state(firmware);
       if (this->installation_mode_text_sensor_ != nullptr)
         this->installation_mode_text_sensor_->publish_state(mode);
+      this->firmware_response_received_ = true;
+      this->finish_metadata_queries_();
       break;
     }
     default:

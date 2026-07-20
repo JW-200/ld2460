@@ -33,7 +33,6 @@ ld2460:
   id: tracking_radar
   uart_id: uart_tracking
   baud_scan: false
-  enable_reporting: true
   presence:
     id: tracking_presence
     name: "Tracking Presence"

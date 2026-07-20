@@ -87,7 +87,10 @@ and are additionally limited by `ld2460_publish_interval`.
 
 The Reporting switch sends the radar's documented on/off reporting command.
 Its state is updated only after the radar acknowledges the request; reporting
-is enabled by default again when the radar is powered on.
+is enabled by default again when the radar is powered on. During startup, the
+component temporarily pauses reporting to query firmware and installation mode,
+then restores reporting when it was previously active. Its state is persisted
+across reboots, defaulting to enabled until the switch has first been changed.
 
 ## Substitutions
 
