@@ -135,8 +135,6 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
-    if wake_loop_on_rx := getattr(uart, "request_wake_loop_on_rx", None):
-        wake_loop_on_rx()
 
     if raw_config := config.get(CONF_RAW):
         sens = await text_sensor.new_text_sensor(raw_config)
