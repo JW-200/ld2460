@@ -728,8 +728,14 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
     }
     case 0x13: {
       if (payload_length >= 1 && this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ACK &&
-          this->pending_settings_command_ == 0x13)
-        this->finish_settings_transaction_(frame[payload_offset] == 0x01);
+          this->pending_settings_command_ == 0x13) {
+        const bool success = frame[payload_offset] == 0x01;
+        if (success && this->sensitivity_select_ != nullptr) {
+          this->sensitivity_select_->publish_state(this->pending_sensitivity_ == 1 ? "High" :
+                                                    this->pending_sensitivity_ == 2 ? "Medium" : "Low");
+        }
+        this->finish_settings_transaction_(success);
+      }
       break;
     }
     case 0x14: {
