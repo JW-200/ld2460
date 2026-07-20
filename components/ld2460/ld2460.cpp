@@ -18,6 +18,11 @@ static const float RAD_TO_DEG = 57.2957795131f;
 // remaining bytes stay in the UART driver's ring buffer for the next loop.
 static const size_t MAX_BYTES_PER_LOOP = 128;
 
+void LD2460ReportingSwitch::write_state(bool state) {
+  if (this->parent_ != nullptr)
+    this->parent_->set_reporting(state);
+}
+
 void LD2460Component::setup() {
   this->rx_buffer_.reserve(this->max_buffer_size_);
   this->frame_buffer_.reserve(this->max_buffer_size_);
@@ -36,13 +41,11 @@ void LD2460Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Publish interval: %" PRIu32 " ms", this->publish_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Report log interval: %" PRIu32 " ms", this->report_log_interval_ms_);
   this->check_uart_settings(115200, 1, uart::UART_CONFIG_PARITY_NONE, 8);
-  LOG_TEXT_SENSOR("  ", "Raw UART", this->raw_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Summary", this->summary_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Firmware", this->firmware_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Installation Mode", this->installation_mode_text_sensor_);
   LOG_BINARY_SENSOR("  ", "Presence", this->presence_binary_sensor_);
   LOG_SENSOR("  ", "Target Count", this->target_count_sensor_);
-  LOG_SENSOR("  ", "Byte Count", this->byte_count_sensor_);
   for (uint8_t i = 0; i < MAX_TARGETS; i++) {
     const auto target = this->target_sensors_[i];
     char prefix[24];
@@ -57,9 +60,13 @@ void LD2460Component::dump_config() {
 void LD2460Component::loop() {
   const uint32_t now = millis();
 
-  if (this->enable_reporting_ && this->total_bytes_ == 0 &&
-      (!this->startup_commands_sent_ || now - this->last_command_ms_ >= 10000) && now > 2000) {
-    this->select_next_baud_rate_();
+  const bool first_startup_command = !this->startup_commands_sent_;
+  const bool retry_without_data = this->total_bytes_ == 0 && now - this->last_command_ms_ >= 10000;
+  if (this->enable_reporting_ && now > 2000 && (first_startup_command || retry_without_data)) {
+    // Keep the UART rate that is already receiving reports. Baud scanning is
+    // only useful when there is no data at all.
+    if (this->total_bytes_ == 0)
+      this->select_next_baud_rate_();
     this->send_startup_commands_();
     this->startup_commands_sent_ = true;
     this->last_command_ms_ = now;
@@ -102,17 +109,19 @@ void LD2460Component::send_startup_commands_() {
   this->send_query_version_command_();
 }
 
-void LD2460Component::send_enable_reporting_command_() {
-  static const uint8_t ENABLE_REPORTING[] = {
+void LD2460Component::set_reporting(bool enabled) { this->send_enable_reporting_command_(enabled); }
+
+void LD2460Component::send_enable_reporting_command_(bool enabled) {
+  uint8_t command[] = {
       0xFD, 0xFC, 0xFB, 0xFA,  // Frame header
       0x06,                    // Open/close reporting function
       0x0C, 0x00,              // Total frame length, little endian
-      0x01,                    // Enable reporting
+      enabled ? 0x01 : 0x00,   // Enable/disable reporting
       0x04, 0x03, 0x02, 0x01   // Frame tail
   };
-  this->write_array(ENABLE_REPORTING, sizeof(ENABLE_REPORTING));
+  this->write_array(command, sizeof(command));
   this->flush();
-  ESP_LOGI(TAG, "Sent LD2460 enable-reporting command.");
+  ESP_LOGD(TAG, "Sent LD2460 %s-reporting command.", enabled ? "enable" : "disable");
 }
 
 void LD2460Component::send_query_version_command_() {
@@ -242,7 +251,7 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
   // useful for a log or state publish. Most reports need only the raw values
   // above to determine whether state changed.
   if (!should_log && !should_publish) {
-    ESP_LOGVV(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
+    ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
     return;
   }
 
@@ -273,18 +282,12 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
     ESP_LOGI(TAG, "LD2460 target report: %s", summary.c_str());
     this->last_report_log_ms_ = now;
   }
-  // Per-frame dumps are intentionally VERY_VERBOSE: DEBUG is ESPHome's common
-  // development level and logging every live report can monopolize the loop.
-  ESP_LOGVV(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
+  ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
 
   if (should_publish) {
     this->publish_targets_(targets, target_count, summary);
     this->remember_published_targets_(targets, target_count);
 
-    if (this->raw_text_sensor_ != nullptr)
-      this->raw_text_sensor_->publish_state(format_frame_(frame));
-    if (this->byte_count_sensor_ != nullptr)
-      this->byte_count_sensor_->publish_state(this->total_bytes_);
     this->last_publish_ms_ = now;
   }
 }
@@ -303,6 +306,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       const bool success = (result & 0x10) != 0;
       const bool enabled = (result & 0x01) != 0;
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
+      if (success && this->reporting_switch_ != nullptr)
+        this->reporting_switch_->publish_state(enabled);
       break;
     }
     case 0x0A: {
@@ -338,10 +343,6 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       break;
   }
 
-  if (this->raw_text_sensor_ != nullptr)
-    this->raw_text_sensor_->publish_state(format_frame_(frame));
-  if (this->byte_count_sensor_ != nullptr)
-    this->byte_count_sensor_->publish_state(this->total_bytes_);
 }
 
 void LD2460Component::publish_targets_(const Target *targets, uint8_t target_count, const std::string &summary) {
@@ -419,11 +420,6 @@ void LD2460Component::flush_unparsed_buffer_() {
   const std::string frame = this->format_frame_(this->rx_buffer_);
   ESP_LOGW(TAG, "Unparsed RX %u byte(s): %s", static_cast<unsigned>(this->rx_buffer_.size()), frame.c_str());
 
-  if (this->raw_text_sensor_ != nullptr)
-    this->raw_text_sensor_->publish_state(frame);
-
-  if (this->byte_count_sensor_ != nullptr)
-    this->byte_count_sensor_->publish_state(this->total_bytes_);
 
   this->rx_buffer_.clear();
 }

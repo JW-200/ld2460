@@ -40,6 +40,9 @@ ld2460:
   target_count:
     id: tracking_target_count
     name: "Tracking Target Count"
+  reporting:
+    id: tracking_reporting
+    name: "Tracking Reporting"
   summary:
     id: tracking_summary
     name: "Tracking Targets"
@@ -49,14 +52,6 @@ ld2460:
   installation_mode:
     id: tracking_installation_mode
     name: "Tracking Radar Installation Mode"
-  raw:
-    id: tracking_raw_uart
-    name: "Tracking Raw UART"
-    disabled_by_default: true
-  byte_count:
-    id: tracking_uart_bytes
-    name: "Tracking UART Bytes"
-    disabled_by_default: true
   target_1:
     x:
       id: tracking_target_1_x

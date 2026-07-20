@@ -38,16 +38,14 @@ ld2460:
     name: "Presence"
   target_count:
     name: "Target Count"
+  reporting:
+    name: "Reporting"
   summary:
     name: "Targets"
   firmware:
     name: "Radar Firmware"
   installation_mode:
     name: "Installation Mode"
-  raw:
-    name: "Raw UART"
-  byte_count:
-    name: "UART Bytes"
   target_1:
     x:
       name: "Target 1 X"

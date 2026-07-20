@@ -1,19 +1,17 @@
 import esphome.codegen as cg
-from esphome.components import binary_sensor, sensor, text_sensor, uart
+from esphome.components import binary_sensor, sensor, switch, text_sensor, uart
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
     DEVICE_CLASS_DISTANCE,
     DEVICE_CLASS_OCCUPANCY,
-    ENTITY_CATEGORY_DIAGNOSTIC,
     ICON_COUNTER,
     STATE_CLASS_MEASUREMENT,
-    STATE_CLASS_TOTAL_INCREASING,
     UNIT_DEGREES,
     UNIT_METER,
 )
 
-AUTO_LOAD = ["binary_sensor", "sensor", "text_sensor"]
+AUTO_LOAD = ["binary_sensor", "sensor", "switch", "text_sensor"]
 DEPENDENCIES = ["uart"]
 MULTI_CONF = True
 
@@ -21,16 +19,16 @@ ld2460_ns = cg.esphome_ns.namespace("ld2460")
 LD2460Component = ld2460_ns.class_(
     "LD2460Component", cg.Component, uart.UARTDevice
 )
+LD2460ReportingSwitch = ld2460_ns.class_("LD2460ReportingSwitch", switch.Switch)
 
-CONF_RAW = "raw"
 CONF_BAUD_SCAN = "baud_scan"
-CONF_BYTE_COUNT = "byte_count"
 CONF_ENABLE_REPORTING = "enable_reporting"
 CONF_FLUSH_TIMEOUT = "flush_timeout"
 CONF_MAX_BUFFER_SIZE = "max_buffer_size"
 CONF_NO_DATA_LOG_INTERVAL = "no_data_log_interval"
 CONF_PUBLISH_INTERVAL = "publish_interval"
 CONF_REPORT_LOG_INTERVAL = "report_log_interval"
+CONF_REPORTING = "reporting"
 CONF_PRESENCE = "presence"
 CONF_SUMMARY = "summary"
 CONF_TARGET_COUNT = "target_count"
@@ -76,10 +74,6 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(LD2460Component),
             cv.Optional(CONF_BAUD_SCAN, default=True): cv.boolean,
-            cv.Optional(CONF_RAW): text_sensor.text_sensor_schema(
-                icon="mdi:serial-port",
-                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-            ),
             cv.Optional(CONF_SUMMARY): text_sensor.text_sensor_schema(
                 icon="mdi:radar",
             ),
@@ -99,12 +93,9 @@ CONFIG_SCHEMA = cv.All(
                 accuracy_decimals=0,
                 state_class=STATE_CLASS_MEASUREMENT,
             ),
-            cv.Optional(CONF_BYTE_COUNT): sensor.sensor_schema(
-                unit_of_measurement="B",
-                icon=ICON_COUNTER,
-                accuracy_decimals=0,
-                state_class=STATE_CLASS_TOTAL_INCREASING,
-                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            cv.Optional(CONF_REPORTING): switch.switch_schema(
+                LD2460ReportingSwitch,
+                icon="mdi:radar",
             ),
             **{cv.Optional(target): TARGET_SCHEMA for target in CONF_TARGETS},
             cv.Optional(CONF_ENABLE_REPORTING, default=True): cv.boolean,
@@ -136,10 +127,6 @@ async def to_code(config):
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
 
-    if raw_config := config.get(CONF_RAW):
-        sens = await text_sensor.new_text_sensor(raw_config)
-        cg.add(var.set_raw_text_sensor(sens))
-
     if summary_config := config.get(CONF_SUMMARY):
         sens = await text_sensor.new_text_sensor(summary_config)
         cg.add(var.set_summary_text_sensor(sens))
@@ -160,9 +147,11 @@ async def to_code(config):
         sens = await sensor.new_sensor(target_count_config)
         cg.add(var.set_target_count_sensor(sens))
 
-    if byte_count_config := config.get(CONF_BYTE_COUNT):
-        sens = await sensor.new_sensor(byte_count_config)
-        cg.add(var.set_byte_count_sensor(sens))
+    if reporting_config := config.get(CONF_REPORTING):
+        reporting_switch = cg.new_Pvariable(reporting_config[CONF_ID])
+        await switch.register_switch(reporting_switch, reporting_config)
+        cg.add(reporting_switch.set_parent(var))
+        cg.add(var.set_reporting_switch(reporting_switch))
 
     for index, target_key in enumerate(CONF_TARGETS):
         target_config = config.get(target_key)

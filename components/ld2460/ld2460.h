@@ -2,6 +2,7 @@
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
@@ -13,6 +14,18 @@
 namespace esphome {
 namespace ld2460 {
 
+class LD2460Component;
+
+class LD2460ReportingSwitch : public switch_::Switch {
+ public:
+  void set_parent(LD2460Component *parent) { this->parent_ = parent; }
+
+ protected:
+  void write_state(bool state) override;
+
+  LD2460Component *parent_{nullptr};
+};
+
 class LD2460Component : public Component, public uart::UARTDevice {
  public:
   static const uint8_t MAX_TARGETS = 5;
@@ -22,7 +35,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::DATA; }
 
-  void set_raw_text_sensor(text_sensor::TextSensor *raw_text_sensor) { this->raw_text_sensor_ = raw_text_sensor; }
   void set_summary_text_sensor(text_sensor::TextSensor *summary_text_sensor) {
     this->summary_text_sensor_ = summary_text_sensor;
   }
@@ -36,7 +48,8 @@ class LD2460Component : public Component, public uart::UARTDevice {
     this->presence_binary_sensor_ = presence_binary_sensor;
   }
   void set_target_count_sensor(sensor::Sensor *target_count_sensor) { this->target_count_sensor_ = target_count_sensor; }
-  void set_byte_count_sensor(sensor::Sensor *byte_count_sensor) { this->byte_count_sensor_ = byte_count_sensor; }
+  void set_reporting_switch(LD2460ReportingSwitch *reporting_switch) { this->reporting_switch_ = reporting_switch; }
+  void set_reporting(bool enabled);
   void set_target_x_sensor(uint8_t index, sensor::Sensor *target_x_sensor);
   void set_target_y_sensor(uint8_t index, sensor::Sensor *target_y_sensor);
   void set_target_distance_sensor(uint8_t index, sensor::Sensor *target_distance_sensor);
@@ -71,7 +84,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   };
 
   void send_startup_commands_();
-  void send_enable_reporting_command_();
+  void send_enable_reporting_command_(bool enabled = true);
   void send_query_version_command_();
   void select_next_baud_rate_();
   void process_rx_buffer_();
@@ -90,13 +103,12 @@ class LD2460Component : public Component, public uart::UARTDevice {
   static int16_t read_i16_le_(const std::vector<uint8_t> &bytes, size_t index);
   static const char *installation_mode_to_string_(uint8_t mode);
 
-  text_sensor::TextSensor *raw_text_sensor_{nullptr};
   text_sensor::TextSensor *summary_text_sensor_{nullptr};
   text_sensor::TextSensor *firmware_text_sensor_{nullptr};
   text_sensor::TextSensor *installation_mode_text_sensor_{nullptr};
   binary_sensor::BinarySensor *presence_binary_sensor_{nullptr};
   sensor::Sensor *target_count_sensor_{nullptr};
-  sensor::Sensor *byte_count_sensor_{nullptr};
+  LD2460ReportingSwitch *reporting_switch_{nullptr};
   TargetSensors target_sensors_[MAX_TARGETS]{};
   Target last_published_targets_[MAX_TARGETS]{};
   std::vector<uint8_t> rx_buffer_{};

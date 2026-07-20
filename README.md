@@ -79,12 +79,15 @@ For a Seeed Studio XIAO ESP32-C6 example:
 - Target 1-5 Y position
 - Target 1-5 distance
 - Target 1-5 angle
-- Diagnostic raw UART frame
-- Diagnostic UART byte counter
+- Reporting enable/disable switch
 - Diagnostic firmware and installation mode text sensors
 
 Home Assistant state updates are published only when the target state changes
 and are additionally limited by `ld2460_publish_interval`.
+
+The Reporting switch sends the radar's documented on/off reporting command.
+Its state is updated only after the radar acknowledges the request; reporting
+is enabled by default again when the radar is powered on.
 
 ## Substitutions
 
