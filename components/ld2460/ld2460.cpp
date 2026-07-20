@@ -46,9 +46,6 @@ void LD2460SensitivitySelect::control(const std::string &value) {
 void LD2460Component::setup() {
   this->rx_buffer_.reserve(this->max_buffer_size_);
   this->frame_buffer_.reserve(this->max_buffer_size_);
-  // Reuse storage for continuous report summaries instead of allocating and
-  // freeing heap memory for every frame.
-  this->summary_buffer_.reserve(384);
 }
 
 void LD2460Component::dump_config() {
@@ -59,7 +56,6 @@ void LD2460Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  No-data log interval: %" PRIu32 " ms", this->no_data_log_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Publish interval: %" PRIu32 " ms", this->publish_interval_ms_);
   this->check_uart_settings(115200, 1, uart::UART_CONFIG_PARITY_NONE, 8);
-  LOG_TEXT_SENSOR("  ", "Summary", this->summary_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Firmware", this->firmware_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Installation Mode", this->installation_mode_text_sensor_);
   LOG_BINARY_SENSOR("  ", "Presence", this->presence_binary_sensor_);
@@ -88,9 +84,7 @@ void LD2460Component::loop() {
     this->last_command_ms_ = now;
   }
 
-  // Give the radar a moment to apply the reporting-off acknowledgement before
-  // issuing settings queries; sending them in the same UART turn loses replies
-  // on some firmware revisions.
+  // Pace startup queries. Some firmware accepts only one command at a time.
   if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA && !this->startup_queries_sent_ &&
       now - this->last_command_ms_ >= 100) {
     this->send_startup_queries_();
@@ -155,6 +149,7 @@ void LD2460Component::send_startup_commands_() {
   // is active. Stop reports first and restore them after the replies arrive.
   this->restore_reporting_after_metadata_ = this->reporting_enabled_;
   this->startup_queries_sent_ = false;
+  this->startup_query_index_ = 0;
   if (this->reporting_enabled_) {
     this->startup_command_state_ = StartupCommandState::WAITING_FOR_DISABLE;
     this->send_enable_reporting_command_(false);
@@ -169,12 +164,27 @@ void LD2460Component::send_startup_queries_() {
     ESP_LOGW(TAG, "Refusing LD2460 startup settings queries while reporting may be active.");
     return;
   }
-  this->send_query_version_command_();
-  this->send_query_installation_mode_command_();
-  this->send_query_installation_parameters_command_();
-  this->send_query_detection_range_command_();
-  this->send_query_sensitivity_command_();
-  this->startup_queries_sent_ = true;
+  switch (this->startup_query_index_++) {
+    case 0:
+      this->send_query_version_command_();
+      break;
+    case 1:
+      this->send_query_installation_mode_command_();
+      break;
+    case 2:
+      this->send_query_installation_parameters_command_();
+      break;
+    case 3:
+      this->send_query_detection_range_command_();
+      break;
+    case 4:
+      this->send_query_sensitivity_command_();
+      this->startup_queries_sent_ = true;
+      break;
+    default:
+      this->startup_queries_sent_ = true;
+      return;
+  }
   this->last_command_ms_ = millis();
 }
 
@@ -537,19 +547,13 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
   const bool should_publish = this->target_state_changed_(targets, target_count) &&
                               now - this->last_publish_ms_ >= this->publish_interval_ms_;
 
-  // Coordinate conversion, trigonometry, and summary formatting are only
+  // Coordinate conversion and trigonometry are only
   // useful for a log or state publish. Most reports need only the raw values
   // above to determine whether state changed.
   if (!should_publish) {
     ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
     return;
   }
-
-  auto &summary = this->summary_buffer_;
-  summary.clear();
-  char target_count_summary[16];
-  std::snprintf(target_count_summary, sizeof(target_count_summary), "targets=%u", target_count);
-  summary = target_count_summary;
 
   for (uint8_t i = 0; i < target_count; i++) {
     const float x_m = targets[i].raw_x / 10.0f;
@@ -562,16 +566,12 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
     targets[i].distance_m = distance_m;
     targets[i].angle_deg = angle_deg;
 
-    char target_summary[96];
-    std::snprintf(target_summary, sizeof(target_summary), "; T%u x=%.1fm y=%.1fm d=%.1fm angle=%.1fdeg",
-                  static_cast<unsigned>(i + 1), x_m, y_m, distance_m, angle_deg);
-    summary += target_summary;
   }
 
   ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
 
   if (should_publish) {
-    this->publish_targets_(targets, target_count, summary);
+    this->publish_targets_(targets, target_count);
     this->remember_published_targets_(targets, target_count);
 
     this->last_publish_ms_ = now;
@@ -608,6 +608,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled) {
           this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
           this->startup_queries_sent_ = false;
+          this->startup_query_index_ = 0;
           this->last_command_ms_ = millis();
         } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
           this->startup_command_state_ = StartupCommandState::COMPLETE;
@@ -745,7 +746,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
 
 }
 
-void LD2460Component::publish_targets_(const Target *targets, uint8_t target_count, const std::string &summary) {
+void LD2460Component::publish_targets_(const Target *targets, uint8_t target_count) {
   const bool count_changed = !this->has_published_targets_ || target_count != this->last_published_target_count_;
 
   if (count_changed) {
@@ -755,9 +756,6 @@ void LD2460Component::publish_targets_(const Target *targets, uint8_t target_cou
     if (this->target_count_sensor_ != nullptr)
       this->target_count_sensor_->publish_state(target_count);
   }
-
-  if (this->summary_text_sensor_ != nullptr)
-    this->summary_text_sensor_->publish_state(summary);
 
   for (uint8_t i = 0; i < MAX_TARGETS; i++) {
     const bool present = i < target_count;
@@ -793,9 +791,6 @@ void LD2460Component::clear_tracking_states_() {
     this->presence_binary_sensor_->publish_state(false);
   if (this->target_count_sensor_ != nullptr)
     this->target_count_sensor_->publish_state(0);
-  if (this->summary_text_sensor_ != nullptr)
-    this->summary_text_sensor_->publish_state("targets=0");
-
   for (auto &target : this->target_sensors_) {
     if (target.x != nullptr)
       target.x->publish_state(NAN);

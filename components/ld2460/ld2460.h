@@ -41,9 +41,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::DATA; }
 
-  void set_summary_text_sensor(text_sensor::TextSensor *summary_text_sensor) {
-    this->summary_text_sensor_ = summary_text_sensor;
-  }
   void set_firmware_text_sensor(text_sensor::TextSensor *firmware_text_sensor) {
     this->firmware_text_sensor_ = firmware_text_sensor;
   }
@@ -122,7 +119,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void process_rx_buffer_();
   void process_report_frame_(const std::vector<uint8_t> &frame);
   void process_command_frame_(const std::vector<uint8_t> &frame);
-  void publish_targets_(const Target *targets, uint8_t target_count, const std::string &summary);
+  void publish_targets_(const Target *targets, uint8_t target_count);
   void clear_tracking_states_();
   bool target_state_changed_(const Target *targets, uint8_t target_count) const;
   void remember_published_targets_(const Target *targets, uint8_t target_count);
@@ -143,7 +140,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
                                       float end_angle) const;
   void publish_config_values_();
 
-  text_sensor::TextSensor *summary_text_sensor_{nullptr};
   text_sensor::TextSensor *firmware_text_sensor_{nullptr};
   text_sensor::TextSensor *installation_mode_text_sensor_{nullptr};
   binary_sensor::BinarySensor *presence_binary_sensor_{nullptr};
@@ -156,7 +152,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
   Target last_published_targets_[MAX_TARGETS]{};
   std::vector<uint8_t> rx_buffer_{};
   std::vector<uint8_t> frame_buffer_{};
-  std::string summary_buffer_{};
   uint32_t flush_timeout_ms_{100};
   uint16_t max_buffer_size_{48};
   uint32_t last_byte_ms_{0};
@@ -176,6 +171,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool baud_scan_{true};
   bool startup_commands_sent_{false};
   bool startup_queries_sent_{false};
+  uint8_t startup_query_index_{0};
   bool firmware_response_received_{false};
   bool installation_mode_response_received_{false};
   bool installation_parameters_response_received_{false};

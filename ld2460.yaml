@@ -38,8 +38,6 @@ ld2460:
   reporting:
     name: "Reporting"
     restore_mode: RESTORE_DEFAULT_ON
-  summary:
-    name: "Targets"
   firmware:
     name: "Radar Firmware"
   installation_mode:

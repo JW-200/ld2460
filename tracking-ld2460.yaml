@@ -41,9 +41,6 @@ ld2460:
     id: tracking_reporting
     name: "Tracking Reporting"
     restore_mode: RESTORE_DEFAULT_ON
-  summary:
-    id: tracking_summary
-    name: "Tracking Targets"
   firmware:
     id: tracking_firmware
     name: "Tracking Radar Firmware"

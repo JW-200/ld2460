@@ -74,7 +74,6 @@ For a Seeed Studio XIAO ESP32-C6 example:
 
 - Presence
 - Target Count
-- Target summary text
 - Target 1-5 X position
 - Target 1-5 Y position
 - Target 1-5 distance

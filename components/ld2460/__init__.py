@@ -32,7 +32,6 @@ CONF_NO_DATA_LOG_INTERVAL = "no_data_log_interval"
 CONF_PUBLISH_INTERVAL = "publish_interval"
 CONF_REPORTING = "reporting"
 CONF_PRESENCE = "presence"
-CONF_SUMMARY = "summary"
 CONF_TARGET_COUNT = "target_count"
 CONF_FIRMWARE = "firmware"
 CONF_INSTALLATION_MODE = "installation_mode"
@@ -82,9 +81,6 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(LD2460Component),
             cv.Optional(CONF_BAUD_SCAN, default=True): cv.boolean,
-            cv.Optional(CONF_SUMMARY): text_sensor.text_sensor_schema(
-                icon="mdi:radar",
-            ),
             cv.Optional(CONF_FIRMWARE): text_sensor.text_sensor_schema(
                 icon="mdi:chip",
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
@@ -151,10 +147,6 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
-
-    if summary_config := config.get(CONF_SUMMARY):
-        sens = await text_sensor.new_text_sensor(summary_config)
-        cg.add(var.set_summary_text_sensor(sens))
 
     if firmware_config := config.get(CONF_FIRMWARE):
         sens = await text_sensor.new_text_sensor(firmware_config)
