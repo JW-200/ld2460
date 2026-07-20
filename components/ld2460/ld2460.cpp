@@ -246,7 +246,7 @@ void LD2460Component::set_config_value(uint8_t field, float value) {
     case 4: this->detection_end_angle_deg_ = value; this->pending_settings_command_ = 0x11; break;
     default: return;
   }
-  this->restore_reporting_after_settings_ = this->reporting_enabled_;
+  this->restore_reporting_after_settings_ = this->requested_reporting_enabled_;
   if (this->reporting_enabled_) {
     this->settings_command_state_ = SettingsCommandState::WAITING_FOR_DISABLE;
     this->send_enable_reporting_command_(false);
@@ -269,7 +269,7 @@ void LD2460Component::set_installation_mode(const std::string &value) {
   }
   this->pending_installation_mode_ = value == "Top" ? 2 : 1;
   this->pending_settings_command_ = 0x09;
-  this->restore_reporting_after_settings_ = this->reporting_enabled_;
+  this->restore_reporting_after_settings_ = this->requested_reporting_enabled_;
   if (this->reporting_enabled_) {
     this->settings_command_state_ = SettingsCommandState::WAITING_FOR_DISABLE;
     this->send_enable_reporting_command_(false);
@@ -287,7 +287,7 @@ void LD2460Component::set_sensitivity(const std::string &value) {
   }
   this->pending_sensitivity_ = value == "High" ? 1 : value == "Medium" ? 2 : 3;
   this->pending_settings_command_ = 0x13;
-  this->restore_reporting_after_settings_ = this->reporting_enabled_;
+  this->restore_reporting_after_settings_ = this->requested_reporting_enabled_;
   this->settings_command_state_ = this->reporting_enabled_ ? SettingsCommandState::WAITING_FOR_DISABLE
                                                             : SettingsCommandState::WAITING_FOR_ACK;
   if (this->reporting_enabled_)
