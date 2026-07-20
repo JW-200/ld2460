@@ -175,6 +175,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   float detection_end_angle_deg_{60.0f};
   bool baud_scan_{true};
   bool startup_commands_sent_{false};
+  bool startup_queries_sent_{false};
   bool firmware_response_received_{false};
   bool installation_mode_response_received_{false};
   bool installation_parameters_response_received_{false};

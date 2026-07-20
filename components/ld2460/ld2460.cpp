@@ -88,8 +88,17 @@ void LD2460Component::loop() {
     this->last_command_ms_ = now;
   }
 
+  // Give the radar a moment to apply the reporting-off acknowledgement before
+  // issuing settings queries; sending them in the same UART turn loses replies
+  // on some firmware revisions.
+  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA && !this->startup_queries_sent_ &&
+      now - this->last_command_ms_ >= 100) {
+    this->send_startup_queries_();
+  }
+
   // Never leave a radar with reporting disabled if a metadata reply is lost.
   if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA &&
+      this->startup_queries_sent_ &&
       now - this->last_command_ms_ >= 2000) {
     ESP_LOGW(TAG, "Timed out waiting for LD2460 metadata.");
     if (this->restore_reporting_after_metadata_) {
@@ -145,6 +154,7 @@ void LD2460Component::send_startup_commands_() {
   // The radar does not reliably answer metadata queries while live reporting
   // is active. Stop reports first and restore them after the replies arrive.
   this->restore_reporting_after_metadata_ = this->reporting_enabled_;
+  this->startup_queries_sent_ = false;
   if (this->reporting_enabled_) {
     this->startup_command_state_ = StartupCommandState::WAITING_FOR_DISABLE;
     this->send_enable_reporting_command_(false);
@@ -164,6 +174,7 @@ void LD2460Component::send_startup_queries_() {
   this->send_query_installation_parameters_command_();
   this->send_query_detection_range_command_();
   this->send_query_sensitivity_command_();
+  this->startup_queries_sent_ = true;
   this->last_command_ms_ = millis();
 }
 
@@ -596,7 +607,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
 
         if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled) {
           this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
-          this->send_startup_queries_();
+          this->startup_queries_sent_ = false;
+          this->last_command_ms_ = millis();
         } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
           this->startup_command_state_ = StartupCommandState::COMPLETE;
         } else if (temporary_settings_disable) {
