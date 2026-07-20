@@ -52,6 +52,24 @@ ld2460:
   installation_mode:
     id: tracking_installation_mode
     name: "Tracking Radar Installation Mode"
+  installation_mode_select:
+    id: tracking_installation_mode_setting
+    name: "Tracking Installation Mode"
+  installation_height:
+    id: tracking_installation_height
+    name: "Tracking Installation Height"
+  installation_angle:
+    id: tracking_installation_angle
+    name: "Tracking Installation Angle"
+  detection_distance:
+    id: tracking_detection_distance
+    name: "Tracking Detection Distance"
+  start_angle:
+    id: tracking_detection_start_angle
+    name: "Tracking Detection Start Angle"
+  end_angle:
+    id: tracking_detection_end_angle
+    name: "Tracking Detection End Angle"
   target_1:
     x:
       id: tracking_target_1_x

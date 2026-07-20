@@ -46,6 +46,18 @@ ld2460:
     name: "Radar Firmware"
   installation_mode:
     name: "Installation Mode"
+  installation_mode_select:
+    name: "Installation Mode Setting"
+  installation_height:
+    name: "Installation Height"
+  installation_angle:
+    name: "Installation Angle"
+  detection_distance:
+    name: "Detection Distance"
+  start_angle:
+    name: "Detection Start Angle"
+  end_angle:
+    name: "Detection End Angle"
   target_1:
     x:
       name: "Target 1 X"

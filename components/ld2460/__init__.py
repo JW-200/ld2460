@@ -1,5 +1,5 @@
 import esphome.codegen as cg
-from esphome.components import binary_sensor, sensor, switch, text_sensor, uart
+from esphome.components import binary_sensor, number, select, sensor, switch, text_sensor, uart
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_ID,
@@ -12,7 +12,7 @@ from esphome.const import (
     UNIT_METER,
 )
 
-AUTO_LOAD = ["binary_sensor", "sensor", "switch", "text_sensor"]
+AUTO_LOAD = ["binary_sensor", "number", "select", "sensor", "switch", "text_sensor"]
 DEPENDENCIES = ["uart"]
 MULTI_CONF = True
 
@@ -21,6 +21,8 @@ LD2460Component = ld2460_ns.class_(
     "LD2460Component", cg.Component, uart.UARTDevice
 )
 LD2460ReportingSwitch = ld2460_ns.class_("LD2460ReportingSwitch", switch.Switch, cg.Component)
+LD2460ConfigNumber = ld2460_ns.class_("LD2460ConfigNumber", number.Number)
+LD2460InstallationModeSelect = ld2460_ns.class_("LD2460InstallationModeSelect", select.Select)
 
 CONF_BAUD_SCAN = "baud_scan"
 CONF_FLUSH_TIMEOUT = "flush_timeout"
@@ -34,6 +36,11 @@ CONF_SUMMARY = "summary"
 CONF_TARGET_COUNT = "target_count"
 CONF_FIRMWARE = "firmware"
 CONF_INSTALLATION_MODE = "installation_mode"
+CONF_INSTALLATION_HEIGHT = "installation_height"
+CONF_INSTALLATION_ANGLE = "installation_angle"
+CONF_DETECTION_DISTANCE = "detection_distance"
+CONF_START_ANGLE = "start_angle"
+CONF_END_ANGLE = "end_angle"
 CONF_X = "x"
 CONF_Y = "y"
 CONF_DISTANCE = "distance"
@@ -97,6 +104,24 @@ CONFIG_SCHEMA = cv.All(
                 LD2460ReportingSwitch,
                 icon="mdi:radar",
             ).extend(cv.COMPONENT_SCHEMA),
+            cv.Optional(CONF_INSTALLATION_HEIGHT): number.number_schema(
+                LD2460ConfigNumber, unit_of_measurement=UNIT_METER, min_value=1.6, max_value=2.6, step=0.01,
+            ),
+            cv.Optional(CONF_INSTALLATION_ANGLE): number.number_schema(
+                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES, min_value=0, max_value=30, step=0.01,
+            ),
+            cv.Optional(CONF_DETECTION_DISTANCE): number.number_schema(
+                LD2460ConfigNumber, unit_of_measurement=UNIT_METER, min_value=0, max_value=6, step=0.1,
+            ),
+            cv.Optional(CONF_START_ANGLE): number.number_schema(
+                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES, min_value=-60, max_value=60, step=0.1,
+            ),
+            cv.Optional(CONF_END_ANGLE): number.number_schema(
+                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES, min_value=-60, max_value=60, step=0.1,
+            ),
+            cv.Optional(CONF_INSTALLATION_MODE + "_select"): select.select_schema(
+                LD2460InstallationModeSelect, options=["Side", "Top"],
+            ),
             **{cv.Optional(target): TARGET_SCHEMA for target in CONF_TARGETS},
             cv.Optional(CONF_FLUSH_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
             # The shortest valid protocol frame is 11 bytes.
@@ -152,6 +177,25 @@ async def to_code(config):
         await switch.register_switch(reporting_switch, reporting_config)
         cg.add(reporting_switch.set_parent(var))
         cg.add(var.set_reporting_switch(reporting_switch))
+
+    number_fields = [
+        (CONF_INSTALLATION_HEIGHT, 0), (CONF_INSTALLATION_ANGLE, 1), (CONF_DETECTION_DISTANCE, 2),
+        (CONF_START_ANGLE, 3), (CONF_END_ANGLE, 4),
+    ]
+    for key, field in number_fields:
+        if number_config := config.get(key):
+            control = cg.new_Pvariable(number_config[CONF_ID])
+            await number.register_number(control, number_config, min_value=number_config["min_value"],
+                                         max_value=number_config["max_value"], step=number_config["step"])
+            cg.add(control.set_parent(var))
+            cg.add(control.set_field(field))
+            cg.add(var.set_config_number(field, control))
+
+    if mode_config := config.get(CONF_INSTALLATION_MODE + "_select"):
+        control = cg.new_Pvariable(mode_config[CONF_ID])
+        await select.register_select(control, mode_config, options=["Side", "Top"])
+        cg.add(control.set_parent(var))
+        cg.add(var.set_installation_mode_select(control))
 
     for index, target_key in enumerate(CONF_TARGETS):
         target_config = config.get(target_key)

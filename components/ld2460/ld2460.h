@@ -2,6 +2,8 @@
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/number/number.h"
+#include "esphome/components/select/select.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
@@ -15,6 +17,8 @@ namespace esphome {
 namespace ld2460 {
 
 class LD2460Component;
+class LD2460ConfigNumber : public number::Number { public: void set_parent(LD2460Component *p) { parent_ = p; } void set_field(uint8_t f) { field_ = f; } protected: void control(float value) override; LD2460Component *parent_{nullptr}; uint8_t field_{0}; };
+class LD2460InstallationModeSelect : public select::Select { public: void set_parent(LD2460Component *p) { parent_ = p; } protected: void control(const std::string &value) override; LD2460Component *parent_{nullptr}; };
 
 class LD2460ReportingSwitch : public switch_::Switch, public Component {
  public:
@@ -52,6 +56,10 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void set_reporting_switch(LD2460ReportingSwitch *reporting_switch) { this->reporting_switch_ = reporting_switch; }
   void set_reporting(bool enabled);
   void restore_reporting(bool enabled);
+  void set_config_number(uint8_t field, LD2460ConfigNumber *control) { if (field < 5) this->config_numbers_[field] = control; }
+  void set_installation_mode_select(LD2460InstallationModeSelect *control) { this->installation_mode_select_ = control; }
+  void set_config_value(uint8_t field, float value);
+  void set_installation_mode(const std::string &value);
   void set_target_x_sensor(uint8_t index, sensor::Sensor *target_x_sensor);
   void set_target_y_sensor(uint8_t index, sensor::Sensor *target_y_sensor);
   void set_target_distance_sensor(uint8_t index, sensor::Sensor *target_distance_sensor);
@@ -102,6 +110,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void process_report_frame_(const std::vector<uint8_t> &frame);
   void process_command_frame_(const std::vector<uint8_t> &frame);
   void publish_targets_(const Target *targets, uint8_t target_count, const std::string &summary);
+  void clear_tracking_states_();
   bool target_state_changed_(const Target *targets, uint8_t target_count) const;
   void remember_published_targets_(const Target *targets, uint8_t target_count);
   void flush_unparsed_buffer_();
@@ -113,6 +122,9 @@ class LD2460Component : public Component, public uart::UARTDevice {
   static uint16_t read_u16_le_(const std::vector<uint8_t> &bytes, size_t index);
   static int16_t read_i16_le_(const std::vector<uint8_t> &bytes, size_t index);
   static const char *installation_mode_to_string_(uint8_t mode);
+  void send_installation_parameters_();
+  void send_detection_range_();
+  void publish_config_values_();
 
   text_sensor::TextSensor *summary_text_sensor_{nullptr};
   text_sensor::TextSensor *firmware_text_sensor_{nullptr};
@@ -120,6 +132,8 @@ class LD2460Component : public Component, public uart::UARTDevice {
   binary_sensor::BinarySensor *presence_binary_sensor_{nullptr};
   sensor::Sensor *target_count_sensor_{nullptr};
   LD2460ReportingSwitch *reporting_switch_{nullptr};
+  LD2460ConfigNumber *config_numbers_[5]{};
+  LD2460InstallationModeSelect *installation_mode_select_{nullptr};
   TargetSensors target_sensors_[MAX_TARGETS]{};
   Target last_published_targets_[MAX_TARGETS]{};
   std::vector<uint8_t> rx_buffer_{};
@@ -137,6 +151,12 @@ class LD2460Component : public Component, public uart::UARTDevice {
   uint32_t report_log_interval_ms_{1000};
   uint8_t last_published_target_count_{0};
   uint8_t baud_index_{0};
+  uint8_t installation_mode_{1};
+  float installation_height_m_{2.6f};
+  float installation_angle_deg_{30.0f};
+  float detection_distance_m_{6.0f};
+  float detection_start_angle_deg_{-60.0f};
+  float detection_end_angle_deg_{60.0f};
   bool baud_scan_{true};
   bool startup_commands_sent_{false};
   bool firmware_response_received_{false};

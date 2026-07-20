@@ -29,6 +29,16 @@ void LD2460ReportingSwitch::setup() {
     this->parent_->restore_reporting(*restored_state);
 }
 
+void LD2460ConfigNumber::control(float value) {
+  if (this->parent_ != nullptr)
+    this->parent_->set_config_value(this->field_, value);
+}
+
+void LD2460InstallationModeSelect::control(const std::string &value) {
+  if (this->parent_ != nullptr)
+    this->parent_->set_installation_mode(value);
+}
+
 void LD2460Component::setup() {
   this->rx_buffer_.reserve(this->max_buffer_size_);
   this->frame_buffer_.reserve(this->max_buffer_size_);
@@ -137,6 +147,56 @@ void LD2460Component::restore_reporting(bool enabled) {
   this->reporting_enabled_ = enabled;
   this->reporting_restore_pending_ = true;
   this->set_reporting(enabled);
+}
+
+void LD2460Component::set_config_value(uint8_t field, float value) {
+  if (field == 3 && value >= this->detection_end_angle_deg_) {
+    ESP_LOGW(TAG, "Start angle must be less than end angle.");
+    return;
+  }
+  if (field == 4 && value <= this->detection_start_angle_deg_) {
+    ESP_LOGW(TAG, "End angle must be greater than start angle.");
+    return;
+  }
+  switch (field) {
+    case 0: this->installation_height_m_ = value; this->send_installation_parameters_(); break;
+    case 1: this->installation_angle_deg_ = value; this->send_installation_parameters_(); break;
+    case 2: this->detection_distance_m_ = value; this->send_detection_range_(); break;
+    case 3: this->detection_start_angle_deg_ = value; this->send_detection_range_(); break;
+    case 4: this->detection_end_angle_deg_ = value; this->send_detection_range_(); break;
+  }
+}
+
+void LD2460Component::set_installation_mode(const std::string &value) {
+  const uint8_t mode = value == "Top" ? 2 : 1;
+  const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x09, 0x0C, 0x00, mode, 0x04, 0x03, 0x02, 0x01};
+  this->write_array(command, sizeof(command));
+  this->flush();
+}
+
+void LD2460Component::send_installation_parameters_() {
+  const int16_t height = static_cast<int16_t>(std::lround(this->installation_height_m_ * 100.0f));
+  const int16_t angle = static_cast<int16_t>(std::lround(this->installation_angle_deg_ * 100.0f));
+  const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x07, 0x0F, 0x00,
+                             static_cast<uint8_t>(height), static_cast<uint8_t>(height >> 8),
+                             static_cast<uint8_t>(angle), static_cast<uint8_t>(angle >> 8), 0x04, 0x03, 0x02, 0x01};
+  this->write_array(command, sizeof(command)); this->flush();
+}
+
+void LD2460Component::send_detection_range_() {
+  const uint8_t distance = static_cast<uint8_t>(std::lround(this->detection_distance_m_ * 10.0f));
+  const int16_t start = static_cast<int16_t>(std::lround(this->detection_start_angle_deg_ * 10.0f));
+  const int16_t end = static_cast<int16_t>(std::lround(this->detection_end_angle_deg_ * 10.0f));
+  const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x11, 0x10, 0x00, distance,
+                             static_cast<uint8_t>(start), static_cast<uint8_t>(start >> 8),
+                             static_cast<uint8_t>(end), static_cast<uint8_t>(end >> 8), 0x04, 0x03, 0x02, 0x01};
+  this->write_array(command, sizeof(command)); this->flush();
+}
+
+void LD2460Component::publish_config_values_() {
+  const float values[] = {this->installation_height_m_, this->installation_angle_deg_, this->detection_distance_m_,
+                          this->detection_start_angle_deg_, this->detection_end_angle_deg_};
+  for (uint8_t i = 0; i < 5; i++) if (this->config_numbers_[i] != nullptr) this->config_numbers_[i]->publish_state(values[i]);
 }
 
 void LD2460Component::send_enable_reporting_command_(bool enabled) {
@@ -360,12 +420,17 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       const uint8_t result = frame[payload_offset];
       const bool success = (result & 0x10) != 0;
       const bool enabled = (result & 0x01) != 0;
+      const bool temporary_startup_disable =
+          this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled;
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
       if (success) {
         this->reporting_enabled_ = enabled;
         this->reporting_restore_pending_ = false;
         if (this->reporting_switch_ != nullptr)
           this->reporting_switch_->publish_state(enabled);
+
+        if (!enabled && !temporary_startup_disable)
+          this->clear_tracking_states_();
 
         if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled) {
           this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
@@ -382,6 +447,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       if (payload_length < 1)
         break;
       const char *mode = installation_mode_to_string_(frame[payload_offset]);
+      this->installation_mode_ = frame[payload_offset];
       ESP_LOGI(TAG, "LD2460 installation mode: %s", mode);
       if (this->installation_mode_text_sensor_ != nullptr)
         this->installation_mode_text_sensor_->publish_state(mode);
@@ -389,10 +455,34 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       this->finish_metadata_queries_();
       break;
     }
+    case 0x07:
+    case 0x11: {
+      if (payload_length < 1)
+        break;
+      if (frame[payload_offset] == 0x01)
+        this->publish_config_values_();
+      else
+        ESP_LOGW(TAG, "LD2460 configuration command 0x%02X failed.", function_code);
+      break;
+    }
+    case 0x09: {
+      if (payload_length < 1)
+        break;
+      const uint8_t result = frame[payload_offset];
+      if ((result & 0x10) != 0) {
+        this->installation_mode_ = result & 0x0F;
+        if (this->installation_mode_select_ != nullptr)
+          this->installation_mode_select_->publish_state(this->installation_mode_ == 2 ? "Top" : "Side");
+      } else {
+        ESP_LOGW(TAG, "LD2460 installation-mode setting failed.");
+      }
+      break;
+    }
     case 0x0B: {
       if (payload_length < 5)
         break;
       const char *mode = installation_mode_to_string_(frame[payload_offset]);
+      this->installation_mode_ = frame[payload_offset];
       const uint8_t year = frame[payload_offset + 1];
       const uint8_t month = frame[payload_offset + 2];
       const uint8_t major = frame[payload_offset + 3];
@@ -405,6 +495,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         this->firmware_text_sensor_->publish_state(firmware);
       if (this->installation_mode_text_sensor_ != nullptr)
         this->installation_mode_text_sensor_->publish_state(mode);
+      if (this->installation_mode_select_ != nullptr)
+        this->installation_mode_select_->publish_state(this->installation_mode_ == 2 ? "Top" : "Side");
       this->firmware_response_received_ = true;
       this->finish_metadata_queries_();
       break;
@@ -458,6 +550,29 @@ void LD2460Component::publish_targets_(const Target *targets, uint8_t target_cou
     if (target.angle != nullptr)
       target.angle->publish_state(angle);
   }
+}
+
+void LD2460Component::clear_tracking_states_() {
+  if (this->presence_binary_sensor_ != nullptr)
+    this->presence_binary_sensor_->publish_state(false);
+  if (this->target_count_sensor_ != nullptr)
+    this->target_count_sensor_->publish_state(0);
+  if (this->summary_text_sensor_ != nullptr)
+    this->summary_text_sensor_->publish_state("targets=0");
+
+  for (auto &target : this->target_sensors_) {
+    if (target.x != nullptr)
+      target.x->publish_state(NAN);
+    if (target.y != nullptr)
+      target.y->publish_state(NAN);
+    if (target.distance != nullptr)
+      target.distance->publish_state(NAN);
+    if (target.angle != nullptr)
+      target.angle->publish_state(NAN);
+  }
+
+  this->last_published_target_count_ = 0;
+  this->has_published_targets_ = false;
 }
 
 bool LD2460Component::target_state_changed_(const Target *targets, uint8_t target_count) const {
