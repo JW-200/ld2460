@@ -20,7 +20,7 @@ ld2460_ns = cg.esphome_ns.namespace("ld2460")
 LD2460Component = ld2460_ns.class_(
     "LD2460Component", cg.Component, uart.UARTDevice
 )
-LD2460ReportingSwitch = ld2460_ns.class_("LD2460ReportingSwitch", switch.Switch)
+LD2460ReportingSwitch = ld2460_ns.class_("LD2460ReportingSwitch", switch.Switch, cg.Component)
 
 CONF_BAUD_SCAN = "baud_scan"
 CONF_FLUSH_TIMEOUT = "flush_timeout"
