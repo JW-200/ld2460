@@ -105,19 +105,19 @@ CONFIG_SCHEMA = cv.All(
                 icon="mdi:radar",
             ).extend(cv.COMPONENT_SCHEMA),
             cv.Optional(CONF_INSTALLATION_HEIGHT): number.number_schema(
-                LD2460ConfigNumber, unit_of_measurement=UNIT_METER, min_value=1.6, max_value=2.6, step=0.01,
+                LD2460ConfigNumber, 1.6, 2.6, 0.01, unit_of_measurement=UNIT_METER,
             ),
             cv.Optional(CONF_INSTALLATION_ANGLE): number.number_schema(
-                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES, min_value=0, max_value=30, step=0.01,
+                LD2460ConfigNumber, 0, 30, 0.01, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_DETECTION_DISTANCE): number.number_schema(
-                LD2460ConfigNumber, unit_of_measurement=UNIT_METER, min_value=0, max_value=6, step=0.1,
+                LD2460ConfigNumber, 0, 6, 0.1, unit_of_measurement=UNIT_METER,
             ),
             cv.Optional(CONF_START_ANGLE): number.number_schema(
-                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES, min_value=-60, max_value=60, step=0.1,
+                LD2460ConfigNumber, -60, 60, 0.1, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_END_ANGLE): number.number_schema(
-                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES, min_value=-60, max_value=60, step=0.1,
+                LD2460ConfigNumber, -60, 60, 0.1, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_INSTALLATION_MODE + "_select"): select.select_schema(
                 LD2460InstallationModeSelect, options=["Side", "Top"],
@@ -179,14 +179,15 @@ async def to_code(config):
         cg.add(var.set_reporting_switch(reporting_switch))
 
     number_fields = [
-        (CONF_INSTALLATION_HEIGHT, 0), (CONF_INSTALLATION_ANGLE, 1), (CONF_DETECTION_DISTANCE, 2),
-        (CONF_START_ANGLE, 3), (CONF_END_ANGLE, 4),
+        (CONF_INSTALLATION_HEIGHT, 0, 1.6, 2.6, 0.01), (CONF_INSTALLATION_ANGLE, 1, 0, 30, 0.01),
+        (CONF_DETECTION_DISTANCE, 2, 0, 6, 0.1), (CONF_START_ANGLE, 3, -60, 60, 0.1),
+        (CONF_END_ANGLE, 4, -60, 60, 0.1),
     ]
-    for key, field in number_fields:
+    for key, field, min_value, max_value, step in number_fields:
         if number_config := config.get(key):
             control = cg.new_Pvariable(number_config[CONF_ID])
-            await number.register_number(control, number_config, min_value=number_config["min_value"],
-                                         max_value=number_config["max_value"], step=number_config["step"])
+            await number.register_number(control, number_config, min_value=min_value,
+                                         max_value=max_value, step=step)
             cg.add(control.set_parent(var))
             cg.add(control.set_field(field))
             cg.add(var.set_config_number(field, control))
