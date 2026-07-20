@@ -54,7 +54,6 @@ void LD2460Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Baud scan: %s", YESNO(this->baud_scan_));
   ESP_LOGCONFIG(TAG, "  No-data log interval: %" PRIu32 " ms", this->no_data_log_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Publish interval: %" PRIu32 " ms", this->publish_interval_ms_);
-  ESP_LOGCONFIG(TAG, "  Report log interval: %" PRIu32 " ms", this->report_log_interval_ms_);
   this->check_uart_settings(115200, 1, uart::UART_CONFIG_PARITY_NONE, 8);
   LOG_TEXT_SENSOR("  ", "Summary", this->summary_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Firmware", this->firmware_text_sensor_);
@@ -88,10 +87,22 @@ void LD2460Component::loop() {
   // Never leave a radar with reporting disabled if a metadata reply is lost.
   if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA &&
       now - this->last_command_ms_ >= 2000) {
-    ESP_LOGW(TAG, "Timed out waiting for LD2460 metadata; restoring reporting.");
-    this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
-    this->send_enable_reporting_command_(true);
-    this->last_command_ms_ = now;
+    ESP_LOGW(TAG, "Timed out waiting for LD2460 metadata.");
+    if (this->restore_reporting_after_metadata_) {
+      this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
+      this->send_enable_reporting_command_(true);
+      this->last_command_ms_ = now;
+    } else {
+      this->startup_command_state_ = StartupCommandState::COMPLETE;
+    }
+  }
+
+  // A failed or lost settings acknowledgement must not leave live reporting
+  // disabled.  The device is still usable even if the requested change failed.
+  if (this->settings_command_state_ != SettingsCommandState::IDLE &&
+      now - this->last_command_ms_ >= 2000) {
+    ESP_LOGW(TAG, "Timed out waiting for LD2460 settings command 0x%02X.", this->pending_settings_command_);
+    this->finish_settings_transaction_(false);
   }
 
   uint8_t byte;
@@ -137,6 +148,8 @@ void LD2460Component::send_startup_commands_() {
     this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
     this->send_query_version_command_();
     this->send_query_installation_mode_command_();
+    this->send_query_installation_parameters_command_();
+    this->send_query_detection_range_command_();
     this->last_command_ms_ = millis();
   }
 }
@@ -150,6 +163,20 @@ void LD2460Component::restore_reporting(bool enabled) {
 }
 
 void LD2460Component::set_config_value(uint8_t field, float value) {
+  if (!this->configuration_loaded_) {
+    ESP_LOGW(TAG, "Ignoring settings change until current LD2460 settings have been read.");
+    return;
+  }
+  if (this->settings_command_state_ != SettingsCommandState::IDLE) {
+    ESP_LOGW(TAG, "Ignoring settings change while another LD2460 settings command is pending.");
+    return;
+  }
+  const bool top_mount = this->installation_mode_ == 2;
+  if ((top_mount && (field == 3 || field == 4) && (value < 0.0f || value > 360.0f)) ||
+      (!top_mount && (field == 3 || field == 4) && (value < -60.0f || value > 60.0f))) {
+    ESP_LOGW(TAG, "%s-mount detection angles are outside the supported range.", top_mount ? "Top" : "Side");
+    return;
+  }
   if (field == 3 && value >= this->detection_end_angle_deg_) {
     ESP_LOGW(TAG, "Start angle must be less than end angle.");
     return;
@@ -159,16 +186,48 @@ void LD2460Component::set_config_value(uint8_t field, float value) {
     return;
   }
   switch (field) {
-    case 0: this->installation_height_m_ = value; this->send_installation_parameters_(); break;
-    case 1: this->installation_angle_deg_ = value; this->send_installation_parameters_(); break;
-    case 2: this->detection_distance_m_ = value; this->send_detection_range_(); break;
-    case 3: this->detection_start_angle_deg_ = value; this->send_detection_range_(); break;
-    case 4: this->detection_end_angle_deg_ = value; this->send_detection_range_(); break;
+    case 0: this->installation_height_m_ = value; this->pending_settings_command_ = 0x07; break;
+    case 1: this->installation_angle_deg_ = value; this->pending_settings_command_ = 0x07; break;
+    case 2: this->detection_distance_m_ = value; this->pending_settings_command_ = 0x11; break;
+    case 3: this->detection_start_angle_deg_ = value; this->pending_settings_command_ = 0x11; break;
+    case 4: this->detection_end_angle_deg_ = value; this->pending_settings_command_ = 0x11; break;
+    default: return;
   }
+  this->restore_reporting_after_settings_ = this->reporting_enabled_;
+  if (this->reporting_enabled_) {
+    this->settings_command_state_ = SettingsCommandState::WAITING_FOR_DISABLE;
+    this->send_enable_reporting_command_(false);
+  } else {
+    this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ACK;
+    if (this->pending_settings_command_ == 0x07)
+      this->send_installation_parameters_();
+    else if (this->pending_settings_command_ == 0x11)
+      this->send_detection_range_();
+    else
+      this->send_installation_mode_command_(this->pending_installation_mode_);
+  }
+  this->last_command_ms_ = millis();
 }
 
 void LD2460Component::set_installation_mode(const std::string &value) {
-  const uint8_t mode = value == "Top" ? 2 : 1;
+  if (this->settings_command_state_ != SettingsCommandState::IDLE) {
+    ESP_LOGW(TAG, "Ignoring installation-mode change while a settings command is pending.");
+    return;
+  }
+  this->pending_installation_mode_ = value == "Top" ? 2 : 1;
+  this->pending_settings_command_ = 0x09;
+  this->restore_reporting_after_settings_ = this->reporting_enabled_;
+  if (this->reporting_enabled_) {
+    this->settings_command_state_ = SettingsCommandState::WAITING_FOR_DISABLE;
+    this->send_enable_reporting_command_(false);
+  } else {
+    this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ACK;
+    this->send_installation_mode_command_(this->pending_installation_mode_);
+  }
+  this->last_command_ms_ = millis();
+}
+
+void LD2460Component::send_installation_mode_command_(uint8_t mode) {
   const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x09, 0x0C, 0x00, mode, 0x04, 0x03, 0x02, 0x01};
   this->write_array(command, sizeof(command));
   this->flush();
@@ -238,9 +297,22 @@ void LD2460Component::send_query_installation_mode_command_() {
   ESP_LOGI(TAG, "Sent LD2460 query-installation-mode command.");
 }
 
+void LD2460Component::send_query_installation_parameters_command_() {
+  static const uint8_t COMMAND[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x08, 0x0C, 0x00, 0x01, 0x04, 0x03, 0x02, 0x01};
+  this->write_array(COMMAND, sizeof(COMMAND));
+  this->flush();
+}
+
+void LD2460Component::send_query_detection_range_command_() {
+  static const uint8_t COMMAND[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x12, 0x0C, 0x00, 0x01, 0x04, 0x03, 0x02, 0x01};
+  this->write_array(COMMAND, sizeof(COMMAND));
+  this->flush();
+}
+
 void LD2460Component::finish_metadata_queries_() {
   if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA ||
-      !this->firmware_response_received_ || !this->installation_mode_response_received_)
+      !this->firmware_response_received_ || !this->installation_mode_response_received_ ||
+      !this->installation_parameters_response_received_ || !this->detection_range_response_received_)
     return;
 
   if (this->restore_reporting_after_metadata_) {
@@ -250,6 +322,23 @@ void LD2460Component::finish_metadata_queries_() {
   } else {
     this->startup_command_state_ = StartupCommandState::COMPLETE;
   }
+}
+
+void LD2460Component::finish_settings_transaction_(bool success) {
+  if (!success)
+    ESP_LOGW(TAG, "LD2460 settings command 0x%02X failed.", this->pending_settings_command_);
+  if (this->restore_reporting_after_settings_) {
+    this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ENABLE;
+    this->send_enable_reporting_command_(true);
+    this->last_command_ms_ = millis();
+  } else {
+    this->settings_command_state_ = SettingsCommandState::IDLE;
+  }
+}
+
+void LD2460Component::update_angle_limits_() {
+  ESP_LOGI(TAG, "LD2460 %s mount: detection-angle limits are %s.", this->installation_mode_ == 2 ? "top" : "side",
+           this->installation_mode_ == 2 ? "0 to 360 degrees" : "-60 to 60 degrees");
 }
 
 void LD2460Component::select_next_baud_rate_() {
@@ -358,14 +447,13 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
   }
 
   const uint32_t now = millis();
-  const bool should_log = now - this->last_report_log_ms_ >= this->report_log_interval_ms_;
   const bool should_publish = this->target_state_changed_(targets, target_count) &&
                               now - this->last_publish_ms_ >= this->publish_interval_ms_;
 
   // Coordinate conversion, trigonometry, and summary formatting are only
   // useful for a log or state publish. Most reports need only the raw values
   // above to determine whether state changed.
-  if (!should_log && !should_publish) {
+  if (!should_publish) {
     ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
     return;
   }
@@ -393,10 +481,6 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
     summary += target_summary;
   }
 
-  if (should_log) {
-    ESP_LOGI(TAG, "LD2460 target report: %s", summary.c_str());
-    this->last_report_log_ms_ = now;
-  }
   ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
 
   if (should_publish) {
@@ -422,6 +506,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       const bool enabled = (result & 0x01) != 0;
       const bool temporary_startup_disable =
           this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled;
+      const bool temporary_settings_disable =
+          this->settings_command_state_ == SettingsCommandState::WAITING_FOR_DISABLE && !enabled;
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
       if (success) {
         this->reporting_enabled_ = enabled;
@@ -429,16 +515,29 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         if (this->reporting_switch_ != nullptr)
           this->reporting_switch_->publish_state(enabled);
 
-        if (!enabled && !temporary_startup_disable)
+        if (!enabled && !temporary_startup_disable && !temporary_settings_disable)
           this->clear_tracking_states_();
 
         if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled) {
           this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
           this->send_query_version_command_();
           this->send_query_installation_mode_command_();
+          this->send_query_installation_parameters_command_();
+          this->send_query_detection_range_command_();
           this->last_command_ms_ = millis();
         } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
           this->startup_command_state_ = StartupCommandState::COMPLETE;
+        } else if (temporary_settings_disable) {
+          this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ACK;
+          if (this->pending_settings_command_ == 0x07)
+            this->send_installation_parameters_();
+          else if (this->pending_settings_command_ == 0x11)
+            this->send_detection_range_();
+          else
+            this->send_installation_mode_command_(this->pending_installation_mode_);
+          this->last_command_ms_ = millis();
+        } else if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE && enabled) {
+          this->settings_command_state_ = SettingsCommandState::IDLE;
         }
       }
       break;
@@ -452,6 +551,30 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       if (this->installation_mode_text_sensor_ != nullptr)
         this->installation_mode_text_sensor_->publish_state(mode);
       this->installation_mode_response_received_ = true;
+      this->update_angle_limits_();
+      this->finish_metadata_queries_();
+      break;
+    }
+    case 0x08: {
+      if (payload_length < 4)
+        break;
+      this->installation_height_m_ = read_i16_le_(frame, payload_offset) / 100.0f;
+      this->installation_angle_deg_ = read_i16_le_(frame, payload_offset + 2) / 100.0f;
+      this->installation_parameters_response_received_ = true;
+      this->configuration_loaded_ = this->detection_range_response_received_;
+      this->publish_config_values_();
+      this->finish_metadata_queries_();
+      break;
+    }
+    case 0x12: {
+      if (payload_length < 5)
+        break;
+      this->detection_distance_m_ = frame[payload_offset] / 10.0f;
+      this->detection_start_angle_deg_ = read_i16_le_(frame, payload_offset + 1) / 10.0f;
+      this->detection_end_angle_deg_ = read_i16_le_(frame, payload_offset + 3) / 10.0f;
+      this->detection_range_response_received_ = true;
+      this->configuration_loaded_ = this->installation_parameters_response_received_;
+      this->publish_config_values_();
       this->finish_metadata_queries_();
       break;
     }
@@ -459,10 +582,14 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
     case 0x11: {
       if (payload_length < 1)
         break;
-      if (frame[payload_offset] == 0x01)
+      const bool success = frame[payload_offset] == 0x01;
+      if (success)
         this->publish_config_values_();
       else
         ESP_LOGW(TAG, "LD2460 configuration command 0x%02X failed.", function_code);
+      if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ACK &&
+          this->pending_settings_command_ == function_code)
+        this->finish_settings_transaction_(success);
       break;
     }
     case 0x09: {
@@ -473,8 +600,15 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         this->installation_mode_ = result & 0x0F;
         if (this->installation_mode_select_ != nullptr)
           this->installation_mode_select_->publish_state(this->installation_mode_ == 2 ? "Top" : "Side");
+        this->update_angle_limits_();
+        if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ACK &&
+            this->pending_settings_command_ == 0x09)
+          this->finish_settings_transaction_(true);
       } else {
         ESP_LOGW(TAG, "LD2460 installation-mode setting failed.");
+        if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ACK &&
+            this->pending_settings_command_ == 0x09)
+          this->finish_settings_transaction_(false);
       }
       break;
     }

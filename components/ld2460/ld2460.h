@@ -71,9 +71,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
     this->no_data_log_interval_ms_ = no_data_log_interval_ms;
   }
   void set_publish_interval(uint32_t publish_interval_ms) { this->publish_interval_ms_ = publish_interval_ms; }
-  void set_report_log_interval(uint32_t report_log_interval_ms) {
-    this->report_log_interval_ms_ = report_log_interval_ms;
-  }
 
  protected:
   struct TargetSensors {
@@ -100,11 +97,22 @@ class LD2460Component : public Component, public uart::UARTDevice {
     COMPLETE,
   };
 
+  enum class SettingsCommandState : uint8_t {
+    IDLE,
+    WAITING_FOR_DISABLE,
+    WAITING_FOR_ACK,
+    WAITING_FOR_ENABLE,
+  };
+
   void send_startup_commands_();
   void send_enable_reporting_command_(bool enabled = true);
   void send_query_version_command_();
   void send_query_installation_mode_command_();
+  void send_query_installation_parameters_command_();
+  void send_query_detection_range_command_();
   void finish_metadata_queries_();
+  void finish_settings_transaction_(bool success);
+  void update_angle_limits_();
   void select_next_baud_rate_();
   void process_rx_buffer_();
   void process_report_frame_(const std::vector<uint8_t> &frame);
@@ -124,6 +132,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   static const char *installation_mode_to_string_(uint8_t mode);
   void send_installation_parameters_();
   void send_detection_range_();
+  void send_installation_mode_command_(uint8_t mode);
   void publish_config_values_();
 
   text_sensor::TextSensor *summary_text_sensor_{nullptr};
@@ -146,9 +155,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   uint32_t last_no_data_log_ms_{0};
   uint32_t last_command_ms_{0};
   uint32_t last_publish_ms_{0};
-  uint32_t last_report_log_ms_{0};
   uint32_t publish_interval_ms_{500};
-  uint32_t report_log_interval_ms_{1000};
   uint8_t last_published_target_count_{0};
   uint8_t baud_index_{0};
   uint8_t installation_mode_{1};
@@ -161,11 +168,18 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool startup_commands_sent_{false};
   bool firmware_response_received_{false};
   bool installation_mode_response_received_{false};
+  bool installation_parameters_response_received_{false};
+  bool detection_range_response_received_{false};
+  bool configuration_loaded_{false};
   bool reporting_enabled_{true};
   bool reporting_restore_pending_{false};
   bool restore_reporting_after_metadata_{true};
+  bool restore_reporting_after_settings_{false};
   bool has_published_targets_{false};
   StartupCommandState startup_command_state_{StartupCommandState::IDLE};
+  SettingsCommandState settings_command_state_{SettingsCommandState::IDLE};
+  uint8_t pending_settings_command_{0};
+  uint8_t pending_installation_mode_{1};
   uint32_t no_data_log_interval_ms_{10000};
 };
 

@@ -29,7 +29,6 @@ CONF_FLUSH_TIMEOUT = "flush_timeout"
 CONF_MAX_BUFFER_SIZE = "max_buffer_size"
 CONF_NO_DATA_LOG_INTERVAL = "no_data_log_interval"
 CONF_PUBLISH_INTERVAL = "publish_interval"
-CONF_REPORT_LOG_INTERVAL = "report_log_interval"
 CONF_REPORTING = "reporting"
 CONF_PRESENCE = "presence"
 CONF_SUMMARY = "summary"
@@ -120,7 +119,7 @@ CONFIG_SCHEMA = cv.All(
                 LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_INSTALLATION_MODE + "_select"): select.select_schema(
-                LD2460InstallationModeSelect, options=["Side", "Top"],
+                LD2460InstallationModeSelect,
             ),
             **{cv.Optional(target): TARGET_SCHEMA for target in CONF_TARGETS},
             cv.Optional(CONF_FLUSH_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
@@ -128,7 +127,6 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_MAX_BUFFER_SIZE, default=48): cv.int_range(min=11, max=512),
             cv.Optional(CONF_NO_DATA_LOG_INTERVAL, default="10s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_PUBLISH_INTERVAL, default="500ms"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_REPORT_LOG_INTERVAL, default="1s"): cv.positive_time_period_milliseconds,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -180,8 +178,8 @@ async def to_code(config):
 
     number_fields = [
         (CONF_INSTALLATION_HEIGHT, 0, 1.6, 2.6, 0.01), (CONF_INSTALLATION_ANGLE, 1, 0, 30, 0.01),
-        (CONF_DETECTION_DISTANCE, 2, 0, 6, 0.1), (CONF_START_ANGLE, 3, -60, 60, 0.1),
-        (CONF_END_ANGLE, 4, -60, 60, 0.1),
+        (CONF_DETECTION_DISTANCE, 2, 0, 6, 0.1), (CONF_START_ANGLE, 3, -60, 360, 0.1),
+        (CONF_END_ANGLE, 4, -60, 360, 0.1),
     ]
     for key, field, min_value, max_value, step in number_fields:
         if number_config := config.get(key):
@@ -224,4 +222,3 @@ async def to_code(config):
     cg.add(var.set_baud_scan(config[CONF_BAUD_SCAN]))
     cg.add(var.set_no_data_log_interval(config[CONF_NO_DATA_LOG_INTERVAL].total_milliseconds))
     cg.add(var.set_publish_interval(config[CONF_PUBLISH_INTERVAL].total_milliseconds))
-    cg.add(var.set_report_log_interval(config[CONF_REPORT_LOG_INTERVAL].total_milliseconds))

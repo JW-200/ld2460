@@ -7,7 +7,6 @@ substitutions:
   ld2460_tx_pin: GPIO16
   ld2460_rx_pin: GPIO17
   ld2460_publish_interval: 500ms
-  ld2460_report_log_interval: 1s
 
 external_components:
   - source: ${ld2460_external_components_source}
@@ -32,7 +31,6 @@ ld2460:
   max_buffer_size: 96
   no_data_log_interval: 10s
   publish_interval: ${ld2460_publish_interval}
-  report_log_interval: ${ld2460_report_log_interval}
   presence:
     id: tracking_presence
     name: "Tracking Presence"

@@ -102,7 +102,6 @@ across reboots, defaulting to enabled until the switch has first been changed.
 | `ld2460_bus_id`                     | `ld2460_bus`                                  | ESPHome UART bus id                                 |
 | `ld2460_component_id`               | `ld2460_radar`                                | ESPHome LD2460 component id                         |
 | `ld2460_publish_interval`           | `500ms`                                       | Minimum interval between changed HA state publishes |
-| `ld2460_report_log_interval`        | `1s`                                          | Interval for readable target report log lines       |
 | `ld2460_external_components_source` | `github://smarthomeshop/ld2460@v0.1.1`        | External component source                           |
 
 ## Protocol Notes
