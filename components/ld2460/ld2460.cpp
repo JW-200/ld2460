@@ -192,9 +192,12 @@ void LD2460Component::set_reporting(bool enabled) {
   if (this->settings_command_state_ != SettingsCommandState::IDLE ||
       (this->startup_command_state_ != StartupCommandState::IDLE &&
        this->startup_command_state_ != StartupCommandState::COMPLETE)) {
-    ESP_LOGW(TAG, "Ignoring reporting change while an LD2460 transaction is active.");
+    ESP_LOGD(TAG, "Queued reporting change while an LD2460 transaction is active.");
+    this->requested_reporting_enabled_ = enabled;
+    this->restore_reporting_after_metadata_ = enabled;
+    this->restore_reporting_after_settings_ = enabled;
     if (this->reporting_switch_ != nullptr)
-      this->reporting_switch_->publish_state(this->requested_reporting_enabled_);
+      this->reporting_switch_->publish_state(enabled);
     return;
   }
   this->requested_reporting_enabled_ = enabled;
