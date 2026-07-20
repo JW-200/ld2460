@@ -53,6 +53,9 @@ ld2460:
   installation_mode_select:
     id: tracking_installation_mode_setting
     name: "Tracking Installation Mode"
+  sensitivity:
+    id: tracking_sensitivity
+    name: "Tracking Radar Sensitivity"
   installation_height:
     id: tracking_installation_height
     name: "Tracking Installation Height"

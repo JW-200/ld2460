@@ -46,6 +46,8 @@ ld2460:
     name: "Installation Mode"
   installation_mode_select:
     name: "Installation Mode Setting"
+  sensitivity:
+    name: "Radar Sensitivity"
   installation_height:
     name: "Installation Height"
   installation_angle:

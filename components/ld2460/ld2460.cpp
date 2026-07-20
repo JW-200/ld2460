@@ -38,6 +38,10 @@ void LD2460InstallationModeSelect::control(const std::string &value) {
   if (this->parent_ != nullptr)
     this->parent_->set_installation_mode(value);
 }
+void LD2460SensitivitySelect::control(const std::string &value) {
+  if (this->parent_ != nullptr)
+    this->parent_->set_sensitivity(value);
+}
 
 void LD2460Component::setup() {
   this->rx_buffer_.reserve(this->max_buffer_size_);
@@ -150,6 +154,7 @@ void LD2460Component::send_startup_commands_() {
     this->send_query_installation_mode_command_();
     this->send_query_installation_parameters_command_();
     this->send_query_detection_range_command_();
+    this->send_query_sensitivity_command_();
     this->last_command_ms_ = millis();
   }
 }
@@ -171,18 +176,25 @@ void LD2460Component::set_config_value(uint8_t field, float value) {
     ESP_LOGW(TAG, "Ignoring settings change while another LD2460 settings command is pending.");
     return;
   }
-  const bool top_mount = this->installation_mode_ == 2;
-  if ((top_mount && (field == 3 || field == 4) && (value < 0.0f || value > 360.0f)) ||
-      (!top_mount && (field == 3 || field == 4) && (value < -60.0f || value > 60.0f))) {
-    ESP_LOGW(TAG, "%s-mount detection angles are outside the supported range.", top_mount ? "Top" : "Side");
+  if (this->installation_mode_ != 1 && (field == 0 || field == 1)) {
+    ESP_LOGW(TAG, "Installation height and angle can only be changed for side mount.");
     return;
   }
-  if (field == 3 && value >= this->detection_end_angle_deg_) {
-    ESP_LOGW(TAG, "Start angle must be less than end angle.");
-    return;
+  float height = this->installation_height_m_;
+  float installation_angle = this->installation_angle_deg_;
+  float distance = this->detection_distance_m_;
+  float start_angle = this->detection_start_angle_deg_;
+  float end_angle = this->detection_end_angle_deg_;
+  switch (field) {
+    case 0: height = value; break;
+    case 1: installation_angle = value; break;
+    case 2: distance = value; break;
+    case 3: start_angle = value; break;
+    case 4: end_angle = value; break;
+    default: return;
   }
-  if (field == 4 && value <= this->detection_start_angle_deg_) {
-    ESP_LOGW(TAG, "End angle must be greater than start angle.");
+  if (!this->configuration_values_in_range_(height, installation_angle, distance, start_angle, end_angle)) {
+    ESP_LOGW(TAG, "Refusing to send LD2460 settings outside their supported range.");
     return;
   }
   switch (field) {
@@ -227,13 +239,44 @@ void LD2460Component::set_installation_mode(const std::string &value) {
   this->last_command_ms_ = millis();
 }
 
+void LD2460Component::set_sensitivity(const std::string &value) {
+  if (this->settings_command_state_ != SettingsCommandState::IDLE) {
+    ESP_LOGW(TAG, "Ignoring sensitivity change while a settings command is pending.");
+    return;
+  }
+  this->pending_sensitivity_ = value == "High" ? 1 : value == "Medium" ? 2 : 3;
+  this->pending_settings_command_ = 0x13;
+  this->restore_reporting_after_settings_ = this->reporting_enabled_;
+  this->settings_command_state_ = this->reporting_enabled_ ? SettingsCommandState::WAITING_FOR_DISABLE
+                                                            : SettingsCommandState::WAITING_FOR_ACK;
+  if (this->reporting_enabled_)
+    this->send_enable_reporting_command_(false);
+  else
+    this->send_sensitivity_command_(this->pending_sensitivity_);
+  this->last_command_ms_ = millis();
+}
+
 void LD2460Component::send_installation_mode_command_(uint8_t mode) {
   const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x09, 0x0C, 0x00, mode, 0x04, 0x03, 0x02, 0x01};
   this->write_array(command, sizeof(command));
   this->flush();
 }
+void LD2460Component::send_sensitivity_command_(uint8_t sensitivity) {
+  const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x13, 0x0C, 0x00, sensitivity, 0x04, 0x03, 0x02, 0x01};
+  this->write_array(command, sizeof(command)); this->flush();
+}
 
 void LD2460Component::send_installation_parameters_() {
+  if (this->installation_mode_ != 1) {
+    ESP_LOGW(TAG, "Refusing installation-parameter command: it is only supported for side mount.");
+    return;
+  }
+  if (!this->configuration_values_in_range_(this->installation_height_m_, this->installation_angle_deg_,
+                                             this->detection_distance_m_, this->detection_start_angle_deg_,
+                                             this->detection_end_angle_deg_)) {
+    ESP_LOGW(TAG, "Refusing to send out-of-range LD2460 installation parameters.");
+    return;
+  }
   const int16_t height = static_cast<int16_t>(std::lround(this->installation_height_m_ * 100.0f));
   const int16_t angle = static_cast<int16_t>(std::lround(this->installation_angle_deg_ * 100.0f));
   const uint8_t command[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x07, 0x0F, 0x00,
@@ -243,6 +286,12 @@ void LD2460Component::send_installation_parameters_() {
 }
 
 void LD2460Component::send_detection_range_() {
+  if (!this->configuration_values_in_range_(this->installation_height_m_, this->installation_angle_deg_,
+                                             this->detection_distance_m_, this->detection_start_angle_deg_,
+                                             this->detection_end_angle_deg_)) {
+    ESP_LOGW(TAG, "Refusing to send out-of-range LD2460 detection range.");
+    return;
+  }
   const uint8_t distance = static_cast<uint8_t>(std::lround(this->detection_distance_m_ * 10.0f));
   const int16_t start = static_cast<int16_t>(std::lround(this->detection_start_angle_deg_ * 10.0f));
   const int16_t end = static_cast<int16_t>(std::lround(this->detection_end_angle_deg_ * 10.0f));
@@ -250,6 +299,19 @@ void LD2460Component::send_detection_range_() {
                              static_cast<uint8_t>(start), static_cast<uint8_t>(start >> 8),
                              static_cast<uint8_t>(end), static_cast<uint8_t>(end >> 8), 0x04, 0x03, 0x02, 0x01};
   this->write_array(command, sizeof(command)); this->flush();
+}
+
+bool LD2460Component::configuration_values_in_range_(float height, float installation_angle, float distance,
+                                                      float start_angle, float end_angle) const {
+  if (!std::isfinite(height) || !std::isfinite(installation_angle) || !std::isfinite(distance) ||
+      !std::isfinite(start_angle) || !std::isfinite(end_angle) || height < 1.6f || height > 2.6f ||
+      installation_angle < 0.0f || installation_angle > 30.0f ||
+      distance < 0.0f || distance > (this->installation_mode_ == 2 ? 4.0f : 6.0f) || start_angle >= end_angle)
+    return false;
+
+  if (this->installation_mode_ == 2)
+    return start_angle >= 0.0f && end_angle <= 360.0f;
+  return start_angle >= -60.0f && end_angle <= 60.0f;
 }
 
 void LD2460Component::publish_config_values_() {
@@ -308,6 +370,10 @@ void LD2460Component::send_query_detection_range_command_() {
   this->write_array(COMMAND, sizeof(COMMAND));
   this->flush();
 }
+void LD2460Component::send_query_sensitivity_command_() {
+  static const uint8_t COMMAND[] = {0xFD, 0xFC, 0xFB, 0xFA, 0x14, 0x0C, 0x00, 0x01, 0x04, 0x03, 0x02, 0x01};
+  this->write_array(COMMAND, sizeof(COMMAND)); this->flush();
+}
 
 void LD2460Component::finish_metadata_queries_() {
   if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA ||
@@ -325,8 +391,9 @@ void LD2460Component::finish_metadata_queries_() {
 }
 
 void LD2460Component::finish_settings_transaction_(bool success) {
-  if (!success)
+  if (!success) {
     ESP_LOGW(TAG, "LD2460 settings command 0x%02X failed.", this->pending_settings_command_);
+  }
   if (this->restore_reporting_after_settings_) {
     this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ENABLE;
     this->send_enable_reporting_command_(true);
@@ -524,6 +591,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
           this->send_query_installation_mode_command_();
           this->send_query_installation_parameters_command_();
           this->send_query_detection_range_command_();
+          this->send_query_sensitivity_command_();
           this->last_command_ms_ = millis();
         } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
           this->startup_command_state_ = StartupCommandState::COMPLETE;
@@ -533,6 +601,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
             this->send_installation_parameters_();
           else if (this->pending_settings_command_ == 0x11)
             this->send_detection_range_();
+          else if (this->pending_settings_command_ == 0x13)
+            this->send_sensitivity_command_(this->pending_sensitivity_);
           else
             this->send_installation_mode_command_(this->pending_installation_mode_);
           this->last_command_ms_ = millis();
@@ -583,10 +653,11 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       if (payload_length < 1)
         break;
       const bool success = frame[payload_offset] == 0x01;
-      if (success)
+      if (success) {
         this->publish_config_values_();
-      else
+      } else {
         ESP_LOGW(TAG, "LD2460 configuration command 0x%02X failed.", function_code);
+      }
       if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ACK &&
           this->pending_settings_command_ == function_code)
         this->finish_settings_transaction_(success);
@@ -610,6 +681,21 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
             this->pending_settings_command_ == 0x09)
           this->finish_settings_transaction_(false);
       }
+      break;
+    }
+    case 0x13: {
+      if (payload_length >= 1 && this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ACK &&
+          this->pending_settings_command_ == 0x13)
+        this->finish_settings_transaction_(frame[payload_offset] == 0x01);
+      break;
+    }
+    case 0x14: {
+      if (payload_length < 1)
+        break;
+      const uint8_t sensitivity = frame[payload_offset];
+      if (sensitivity >= 1 && sensitivity <= 3 && this->sensitivity_select_ != nullptr)
+        this->sensitivity_select_->publish_state(sensitivity == 1 ? "High" : sensitivity == 2 ? "Medium" : "Low");
+      this->sensitivity_response_received_ = true;
       break;
     }
     case 0x0B: {

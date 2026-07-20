@@ -23,6 +23,7 @@ LD2460Component = ld2460_ns.class_(
 LD2460ReportingSwitch = ld2460_ns.class_("LD2460ReportingSwitch", switch.Switch, cg.Component)
 LD2460ConfigNumber = ld2460_ns.class_("LD2460ConfigNumber", number.Number)
 LD2460InstallationModeSelect = ld2460_ns.class_("LD2460InstallationModeSelect", select.Select)
+LD2460SensitivitySelect = ld2460_ns.class_("LD2460SensitivitySelect", select.Select)
 
 CONF_BAUD_SCAN = "baud_scan"
 CONF_FLUSH_TIMEOUT = "flush_timeout"
@@ -40,6 +41,7 @@ CONF_INSTALLATION_ANGLE = "installation_angle"
 CONF_DETECTION_DISTANCE = "detection_distance"
 CONF_START_ANGLE = "start_angle"
 CONF_END_ANGLE = "end_angle"
+CONF_SENSITIVITY = "sensitivity"
 CONF_X = "x"
 CONF_Y = "y"
 CONF_DISTANCE = "distance"
@@ -121,6 +123,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_INSTALLATION_MODE + "_select"): select.select_schema(
                 LD2460InstallationModeSelect,
             ),
+            cv.Optional(CONF_SENSITIVITY): select.select_schema(LD2460SensitivitySelect),
             **{cv.Optional(target): TARGET_SCHEMA for target in CONF_TARGETS},
             cv.Optional(CONF_FLUSH_TIMEOUT, default="100ms"): cv.positive_time_period_milliseconds,
             # The shortest valid protocol frame is 11 bytes.
@@ -195,6 +198,12 @@ async def to_code(config):
         await select.register_select(control, mode_config, options=["Side", "Top"])
         cg.add(control.set_parent(var))
         cg.add(var.set_installation_mode_select(control))
+
+    if sensitivity_config := config.get(CONF_SENSITIVITY):
+        control = cg.new_Pvariable(sensitivity_config[CONF_ID])
+        await select.register_select(control, sensitivity_config, options=["High", "Medium", "Low"])
+        cg.add(control.set_parent(var))
+        cg.add(var.set_sensitivity_select(control))
 
     for index, target_key in enumerate(CONF_TARGETS):
         target_config = config.get(target_key)
