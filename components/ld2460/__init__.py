@@ -105,19 +105,19 @@ CONFIG_SCHEMA = cv.All(
                 icon="mdi:radar",
             ).extend(cv.COMPONENT_SCHEMA),
             cv.Optional(CONF_INSTALLATION_HEIGHT): number.number_schema(
-                LD2460ConfigNumber, 1.6, 2.6, 0.01, unit_of_measurement=UNIT_METER,
+                LD2460ConfigNumber, unit_of_measurement=UNIT_METER,
             ),
             cv.Optional(CONF_INSTALLATION_ANGLE): number.number_schema(
-                LD2460ConfigNumber, 0, 30, 0.01, unit_of_measurement=UNIT_DEGREES,
+                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_DETECTION_DISTANCE): number.number_schema(
-                LD2460ConfigNumber, 0, 6, 0.1, unit_of_measurement=UNIT_METER,
+                LD2460ConfigNumber, unit_of_measurement=UNIT_METER,
             ),
             cv.Optional(CONF_START_ANGLE): number.number_schema(
-                LD2460ConfigNumber, -60, 60, 0.1, unit_of_measurement=UNIT_DEGREES,
+                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_END_ANGLE): number.number_schema(
-                LD2460ConfigNumber, -60, 60, 0.1, unit_of_measurement=UNIT_DEGREES,
+                LD2460ConfigNumber, unit_of_measurement=UNIT_DEGREES,
             ),
             cv.Optional(CONF_INSTALLATION_MODE + "_select"): select.select_schema(
                 LD2460InstallationModeSelect, options=["Side", "Top"],
