@@ -106,6 +106,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
 
   void send_startup_commands_();
   void send_startup_queries_();
+  void advance_startup_query_(uint8_t response_function_code);
   void send_enable_reporting_command_(bool enabled = true);
   void send_query_version_command_();
   void send_query_installation_mode_command_();
@@ -171,7 +172,9 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool baud_scan_{true};
   bool startup_commands_sent_{false};
   bool startup_queries_sent_{false};
+  bool startup_query_waiting_{false};
   uint8_t startup_query_index_{0};
+  uint8_t startup_expected_response_function_{0};
   bool firmware_response_received_{false};
   bool installation_mode_response_received_{false};
   bool installation_parameters_response_received_{false};
@@ -180,7 +183,6 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool configuration_loaded_{false};
   bool reporting_enabled_{true};
   bool requested_reporting_enabled_{true};
-  bool reporting_restore_pending_{false};
   bool restore_reporting_after_metadata_{true};
   bool restore_reporting_after_settings_{false};
   bool has_published_targets_{false};

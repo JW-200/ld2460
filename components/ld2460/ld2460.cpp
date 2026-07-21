@@ -74,7 +74,7 @@ void LD2460Component::dump_config() {
 void LD2460Component::loop() {
   const uint32_t now = millis();
 
-  if (now > 2000 && !this->startup_commands_sent_ && !this->reporting_restore_pending_) {
+  if (now > 2000 && !this->startup_commands_sent_) {
     // Keep the UART rate that is already receiving reports; baud scanning is
     // only useful when there is no data at all.
     if (this->total_bytes_ == 0)
@@ -86,13 +86,12 @@ void LD2460Component::loop() {
 
   // Pace startup queries. Some firmware accepts only one command at a time.
   if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA && !this->startup_queries_sent_ &&
-      now - this->last_command_ms_ >= 100) {
+      !this->startup_query_waiting_ && now - this->last_command_ms_ >= 100) {
     this->send_startup_queries_();
   }
 
   // Never leave a radar with reporting disabled if a metadata reply is lost.
   if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA &&
-      this->startup_queries_sent_ &&
       now - this->last_command_ms_ >= 2000) {
     ESP_LOGW(TAG, "Timed out waiting for LD2460 metadata.");
     if (this->restore_reporting_after_metadata_) {
@@ -146,17 +145,16 @@ void LD2460Component::loop() {
 
 void LD2460Component::send_startup_commands_() {
   // The radar does not reliably answer metadata queries while live reporting
-  // is active. Stop reports first and restore them after the replies arrive.
-  this->restore_reporting_after_metadata_ = this->reporting_enabled_;
+  // is active. Stop reports first and restore the saved user choice after the
+  // replies arrive.  In particular, do not send this command from the switch
+  // setup hook: that hook can run before the UART driver is ready on ESP32.
+  this->restore_reporting_after_metadata_ = this->requested_reporting_enabled_;
   this->startup_queries_sent_ = false;
+  this->startup_query_waiting_ = false;
   this->startup_query_index_ = 0;
-  if (this->reporting_enabled_) {
-    this->startup_command_state_ = StartupCommandState::WAITING_FOR_DISABLE;
-    this->send_enable_reporting_command_(false);
-  } else {
-    this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
-    this->send_startup_queries_();
-  }
+  this->startup_expected_response_function_ = 0;
+  this->startup_command_state_ = StartupCommandState::WAITING_FOR_DISABLE;
+  this->send_enable_reporting_command_(false);
 }
 
 void LD2460Component::send_startup_queries_() {
@@ -164,28 +162,56 @@ void LD2460Component::send_startup_queries_() {
     ESP_LOGW(TAG, "Refusing LD2460 startup settings queries while reporting may be active.");
     return;
   }
+  if (this->startup_query_waiting_)
+    return;
+
+  // Installation parameters exist only for side-mounted units.  Do not issue
+  // an unsupported query once the mode response has identified a top mount.
+  if (this->startup_query_index_ == 2 && this->installation_mode_ == 2)
+    this->startup_query_index_++;
+
   switch (this->startup_query_index_++) {
     case 0:
       this->send_query_version_command_();
+      this->startup_expected_response_function_ = 0x0B;
       break;
     case 1:
       this->send_query_installation_mode_command_();
+      this->startup_expected_response_function_ = 0x0A;
       break;
     case 2:
       this->send_query_installation_parameters_command_();
+      this->startup_expected_response_function_ = 0x08;
       break;
     case 3:
       this->send_query_detection_range_command_();
+      this->startup_expected_response_function_ = 0x12;
       break;
     case 4:
       this->send_query_sensitivity_command_();
-      this->startup_queries_sent_ = true;
+      this->startup_expected_response_function_ = 0x14;
       break;
     default:
       this->startup_queries_sent_ = true;
       return;
   }
+  this->startup_query_waiting_ = true;
   this->last_command_ms_ = millis();
+}
+
+void LD2460Component::advance_startup_query_(uint8_t response_function_code) {
+  if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA || !this->startup_query_waiting_ ||
+      this->startup_query_index_ == 0)
+    return;
+
+  if (response_function_code != this->startup_expected_response_function_)
+    return;
+
+  this->startup_query_waiting_ = false;
+  this->startup_expected_response_function_ = 0;
+  this->last_command_ms_ = millis();
+  if (this->startup_query_index_ >= 5)
+    this->startup_queries_sent_ = true;
 }
 
 void LD2460Component::set_reporting(bool enabled) {
@@ -206,9 +232,9 @@ void LD2460Component::set_reporting(bool enabled) {
 
 void LD2460Component::restore_reporting(bool enabled) {
   this->requested_reporting_enabled_ = enabled;
-  this->reporting_enabled_ = enabled;
-  this->reporting_restore_pending_ = true;
-  this->send_enable_reporting_command_(enabled);
+  // Switch setup runs independently of this component's setup priority.  A
+  // write/flush here could access a UART that has not been initialized yet.
+  // The startup transaction in loop() applies this saved state safely.
 }
 
 void LD2460Component::set_config_value(uint8_t field, float value) {
@@ -620,7 +646,6 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
       if (success) {
         this->reporting_enabled_ = enabled;
-        this->reporting_restore_pending_ = false;
         // A settings/metadata pause must not change the user-facing switch.
         // It represents the requested reporting state, not a brief transport
         // state used to make a command transaction reliable.
@@ -665,6 +690,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         this->installation_mode_text_sensor_->publish_state(mode);
       this->installation_mode_response_received_ = true;
       this->update_angle_limits_();
+      this->advance_startup_query_(function_code);
       this->finish_metadata_queries_();
       break;
     }
@@ -676,6 +702,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       this->installation_parameters_response_received_ = true;
       this->configuration_loaded_ = this->detection_range_response_received_;
       this->publish_config_values_();
+      this->advance_startup_query_(function_code);
       this->finish_metadata_queries_();
       break;
     }
@@ -688,6 +715,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       this->detection_range_response_received_ = true;
       this->configuration_loaded_ = this->installation_parameters_response_received_;
       this->publish_config_values_();
+      this->advance_startup_query_(function_code);
       this->finish_metadata_queries_();
       break;
     }
@@ -745,6 +773,8 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       if (sensitivity >= 1 && sensitivity <= 3 && this->sensitivity_select_ != nullptr)
         this->sensitivity_select_->publish_state(sensitivity == 1 ? "High" : sensitivity == 2 ? "Medium" : "Low");
       this->sensitivity_response_received_ = true;
+      this->advance_startup_query_(function_code);
+      this->finish_metadata_queries_();
       break;
     }
     case 0x0B: {
@@ -767,6 +797,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
       if (this->installation_mode_select_ != nullptr)
         this->installation_mode_select_->publish_state(this->installation_mode_ == 2 ? "Top" : "Side");
       this->firmware_response_received_ = true;
+      this->advance_startup_query_(function_code);
       this->finish_metadata_queries_();
       break;
     }
