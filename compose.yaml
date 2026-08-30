@@ -1,0 +1,12 @@
+services:
+  esphome:
+    image: ghcr.io/esphome/esphome:2026.8.1
+    container_name: ld2460-esphome
+    command: dashboard /config --port 6052
+    restart: unless-stopped
+    ports:
+      - "6052:6052"
+    volumes:
+      - ./:/config
+    environment:
+      TZ: Europe/Vienna

@@ -14,6 +14,8 @@ namespace ld2460 {
 static const char *const TAG = "ld2460";
 static const uint32_t BAUD_RATES[] = {115200, 9600, 19200, 38400, 57600, 230400, 256000, 460800};
 static const float RAD_TO_DEG = 57.2957795131f;
+static const uint32_t COMMAND_TIMEOUT_MS = 750;
+static const uint8_t MAX_COMMAND_RETRIES = 2;
 // Do not let a continuously busy UART monopolize ESPHome's main loop.  The
 // remaining bytes stay in the UART driver's ring buffer for the next loop.
 static const size_t MAX_BYTES_PER_LOOP = 128;
@@ -25,8 +27,12 @@ void LD2460ReportingSwitch::write_state(bool state) {
 
 void LD2460ReportingSwitch::setup() {
   const auto restored_state = this->get_initial_state_with_restore_mode();
+  const bool enabled = restored_state.value_or(true);
   if (this->parent_ != nullptr)
-    this->parent_->restore_reporting(restored_state.value_or(true));
+    this->parent_->restore_reporting(enabled);
+  // Always initialize the entity. Waiting for a transport acknowledgement
+  // left the switch unavailable when the user's restored choice was OFF.
+  this->publish_state(enabled);
 }
 
 void LD2460ConfigNumber::control(float value) {
@@ -74,43 +80,6 @@ void LD2460Component::dump_config() {
 void LD2460Component::loop() {
   const uint32_t now = millis();
 
-  if (now > 2000 && !this->startup_commands_sent_) {
-    // Keep the UART rate that is already receiving reports; baud scanning is
-    // only useful when there is no data at all.
-    if (this->total_bytes_ == 0)
-      this->select_next_baud_rate_();
-    this->send_startup_commands_();
-    this->startup_commands_sent_ = true;
-    this->last_command_ms_ = now;
-  }
-
-  // Pace startup queries. Some firmware accepts only one command at a time.
-  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA && !this->startup_queries_sent_ &&
-      !this->startup_query_waiting_ && now - this->last_command_ms_ >= 100) {
-    this->send_startup_queries_();
-  }
-
-  // Never leave a radar with reporting disabled if a metadata reply is lost.
-  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA &&
-      now - this->last_command_ms_ >= 2000) {
-    ESP_LOGW(TAG, "Timed out waiting for LD2460 metadata.");
-    if (this->restore_reporting_after_metadata_) {
-      this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
-      this->send_enable_reporting_command_(true);
-      this->last_command_ms_ = now;
-    } else {
-      this->startup_command_state_ = StartupCommandState::COMPLETE;
-    }
-  }
-
-  // A failed or lost settings acknowledgement must not leave live reporting
-  // disabled.  The device is still usable even if the requested change failed.
-  if (this->settings_command_state_ != SettingsCommandState::IDLE &&
-      now - this->last_command_ms_ >= 2000) {
-    ESP_LOGW(TAG, "Timed out waiting for LD2460 settings command 0x%02X.", this->pending_settings_command_);
-    this->finish_settings_transaction_(false);
-  }
-
   uint8_t byte;
   size_t bytes_read = 0;
   while (bytes_read < MAX_BYTES_PER_LOOP && this->available() > 0) {
@@ -141,6 +110,18 @@ void LD2460Component::loop() {
     ESP_LOGW(TAG, "No UART bytes received yet on RX. Check LD2460 TX -> ESP RX, common GND, power, and baud.");
     this->last_no_data_log_ms_ = now;
   }
+
+  // Handle replies before checking timeouts. This avoids retransmitting a
+  // command whose acknowledgement was already waiting in the UART buffer.
+  if (now > 2000 && !this->startup_commands_sent_) {
+    if (this->total_bytes_ == 0)
+      this->select_next_baud_rate_();
+    this->send_startup_commands_();
+    this->startup_commands_sent_ = true;
+    this->last_command_ms_ = now;
+  }
+  this->service_startup_transaction_(now);
+  this->service_settings_transaction_(now);
 }
 
 void LD2460Component::send_startup_commands_() {
@@ -153,6 +134,7 @@ void LD2460Component::send_startup_commands_() {
   this->startup_query_waiting_ = false;
   this->startup_query_index_ = 0;
   this->startup_expected_response_function_ = 0;
+  this->startup_retry_count_ = 0;
   this->startup_command_state_ = StartupCommandState::WAITING_FOR_DISABLE;
   this->send_enable_reporting_command_(false);
 }
@@ -170,7 +152,13 @@ void LD2460Component::send_startup_queries_() {
   if (this->startup_query_index_ == 2 && this->installation_mode_ == 2)
     this->startup_query_index_++;
 
-  switch (this->startup_query_index_++) {
+  if (this->startup_query_index_ >= 5) {
+    this->startup_queries_sent_ = true;
+    this->finish_metadata_queries_();
+    return;
+  }
+
+  switch (this->startup_query_index_) {
     case 0:
       this->send_query_version_command_();
       this->startup_expected_response_function_ = 0x0B;
@@ -192,16 +180,27 @@ void LD2460Component::send_startup_queries_() {
       this->startup_expected_response_function_ = 0x14;
       break;
     default:
-      this->startup_queries_sent_ = true;
       return;
   }
   this->startup_query_waiting_ = true;
+  this->startup_retry_count_ = 0;
   this->last_command_ms_ = millis();
+}
+
+void LD2460Component::resend_startup_query_() {
+  switch (this->startup_query_index_) {
+    case 0: this->send_query_version_command_(); break;
+    case 1: this->send_query_installation_mode_command_(); break;
+    case 2: this->send_query_installation_parameters_command_(); break;
+    case 3: this->send_query_detection_range_command_(); break;
+    case 4: this->send_query_sensitivity_command_(); break;
+    default: break;
+  }
 }
 
 void LD2460Component::advance_startup_query_(uint8_t response_function_code) {
   if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA || !this->startup_query_waiting_ ||
-      this->startup_query_index_ == 0)
+      this->startup_query_index_ >= 5)
     return;
 
   if (response_function_code != this->startup_expected_response_function_)
@@ -209,9 +208,60 @@ void LD2460Component::advance_startup_query_(uint8_t response_function_code) {
 
   this->startup_query_waiting_ = false;
   this->startup_expected_response_function_ = 0;
+  this->startup_query_index_++;
+  this->startup_retry_count_ = 0;
   this->last_command_ms_ = millis();
   if (this->startup_query_index_ >= 5)
     this->startup_queries_sent_ = true;
+}
+
+void LD2460Component::service_startup_transaction_(uint32_t now) {
+  if (this->startup_command_state_ == StartupCommandState::IDLE ||
+      this->startup_command_state_ == StartupCommandState::COMPLETE)
+    return;
+
+  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA &&
+      !this->startup_query_waiting_) {
+    if (now - this->last_command_ms_ >= 100)
+      this->send_startup_queries_();
+    return;
+  }
+
+  if (now - this->last_command_ms_ < COMMAND_TIMEOUT_MS)
+    return;
+
+  if (this->startup_retry_count_ < MAX_COMMAND_RETRIES) {
+    this->startup_retry_count_++;
+    ESP_LOGW(TAG, "Retrying LD2460 startup command (%u/%u).",
+             this->startup_retry_count_, MAX_COMMAND_RETRIES);
+    if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE)
+      this->send_enable_reporting_command_(false);
+    else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE)
+      this->send_enable_reporting_command_(this->restore_reporting_after_metadata_);
+    else
+      this->resend_startup_query_();
+    this->last_command_ms_ = now;
+    return;
+  }
+
+  this->startup_retry_count_ = 0;
+  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE) {
+    // The command may have succeeded even if its acknowledgement was lost.
+    // Continue querying, then make a final best effort to restore reporting.
+    ESP_LOGW(TAG, "No acknowledgement for reporting disable; continuing startup queries.");
+    this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
+    this->last_command_ms_ = now;
+  } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_METADATA) {
+    ESP_LOGW(TAG, "No response to startup query 0x%02X; continuing with remaining fields.",
+             this->startup_expected_response_function_);
+    this->startup_query_waiting_ = false;
+    this->startup_expected_response_function_ = 0;
+    this->startup_query_index_++;
+    this->last_command_ms_ = now;
+  } else {
+    ESP_LOGE(TAG, "No acknowledgement while restoring reporting; startup will continue in degraded state.");
+    this->startup_command_state_ = StartupCommandState::COMPLETE;
+  }
 }
 
 void LD2460Component::set_reporting(bool enabled) {
@@ -238,6 +288,10 @@ void LD2460Component::restore_reporting(bool enabled) {
 }
 
 void LD2460Component::set_config_value(uint8_t field, float value) {
+  if (this->startup_command_state_ != StartupCommandState::COMPLETE) {
+    ESP_LOGW(TAG, "Ignoring settings change while LD2460 startup is in progress.");
+    return;
+  }
   const bool installation_setting = field == 0 || field == 1;
   const bool detection_setting = field >= 2 && field <= 4;
   if ((installation_setting && !this->installation_parameters_response_received_) ||
@@ -279,6 +333,7 @@ void LD2460Component::set_config_value(uint8_t field, float value) {
     default: return;
   }
   this->restore_reporting_after_settings_ = this->requested_reporting_enabled_;
+  this->settings_retry_count_ = 0;
   if (this->reporting_enabled_) {
     this->settings_command_state_ = SettingsCommandState::WAITING_FOR_DISABLE;
     this->send_enable_reporting_command_(false);
@@ -295,6 +350,10 @@ void LD2460Component::set_config_value(uint8_t field, float value) {
 }
 
 void LD2460Component::set_installation_mode(const std::string &value) {
+  if (this->startup_command_state_ != StartupCommandState::COMPLETE) {
+    ESP_LOGW(TAG, "Ignoring installation-mode change while LD2460 startup is in progress.");
+    return;
+  }
   if (this->settings_command_state_ != SettingsCommandState::IDLE) {
     ESP_LOGW(TAG, "Ignoring installation-mode change while a settings command is pending.");
     return;
@@ -302,6 +361,7 @@ void LD2460Component::set_installation_mode(const std::string &value) {
   this->pending_installation_mode_ = value == "Top" ? 2 : 1;
   this->pending_settings_command_ = 0x09;
   this->restore_reporting_after_settings_ = this->requested_reporting_enabled_;
+  this->settings_retry_count_ = 0;
   if (this->reporting_enabled_) {
     this->settings_command_state_ = SettingsCommandState::WAITING_FOR_DISABLE;
     this->send_enable_reporting_command_(false);
@@ -313,6 +373,10 @@ void LD2460Component::set_installation_mode(const std::string &value) {
 }
 
 void LD2460Component::set_sensitivity(const std::string &value) {
+  if (this->startup_command_state_ != StartupCommandState::COMPLETE) {
+    ESP_LOGW(TAG, "Ignoring sensitivity change while LD2460 startup is in progress.");
+    return;
+  }
   if (this->settings_command_state_ != SettingsCommandState::IDLE) {
     ESP_LOGW(TAG, "Ignoring sensitivity change while a settings command is pending.");
     return;
@@ -320,6 +384,7 @@ void LD2460Component::set_sensitivity(const std::string &value) {
   this->pending_sensitivity_ = value == "High" ? 1 : value == "Medium" ? 2 : 3;
   this->pending_settings_command_ = 0x13;
   this->restore_reporting_after_settings_ = this->requested_reporting_enabled_;
+  this->settings_retry_count_ = 0;
   this->settings_command_state_ = this->reporting_enabled_ ? SettingsCommandState::WAITING_FOR_DISABLE
                                                             : SettingsCommandState::WAITING_FOR_ACK;
   if (this->reporting_enabled_)
@@ -390,7 +455,12 @@ bool LD2460Component::configuration_values_in_range_(float height, float install
 void LD2460Component::publish_config_values_() {
   const float values[] = {this->installation_height_m_, this->installation_angle_deg_, this->detection_distance_m_,
                           this->detection_start_angle_deg_, this->detection_end_angle_deg_};
-  for (uint8_t i = 0; i < 5; i++) if (this->config_numbers_[i] != nullptr) this->config_numbers_[i]->publish_state(values[i]);
+  for (uint8_t i = 0; i < 5; i++) {
+    const bool value_was_read = i < 2 ? this->installation_parameters_response_received_
+                                      : this->detection_range_response_received_;
+    if (value_was_read && this->config_numbers_[i] != nullptr)
+      this->config_numbers_[i]->publish_state(values[i]);
+  }
 }
 
 void LD2460Component::send_enable_reporting_command_(bool enabled) {
@@ -450,19 +520,21 @@ void LD2460Component::send_query_sensitivity_command_() {
 
 void LD2460Component::finish_metadata_queries_() {
   if (this->startup_command_state_ != StartupCommandState::WAITING_FOR_METADATA ||
-      !this->firmware_response_received_ || !this->installation_mode_response_received_ ||
-      !(this->installation_mode_ == 2 || this->installation_parameters_response_received_) ||
-      !this->detection_range_response_received_ ||
-      !this->sensitivity_response_received_)
+      !this->startup_queries_sent_)
     return;
 
-  if (this->restore_reporting_after_metadata_) {
-    this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
-    this->send_enable_reporting_command_(true);
-    this->last_command_ms_ = millis();
-  } else {
-    this->startup_command_state_ = StartupCommandState::COMPLETE;
+  if (!this->firmware_response_received_ || !this->installation_mode_response_received_ ||
+      !(this->installation_mode_ == 2 || this->installation_parameters_response_received_) ||
+      !this->detection_range_response_received_ || !this->sensitivity_response_received_) {
+    ESP_LOGW(TAG, "LD2460 startup completed with one or more unavailable metadata fields.");
   }
+
+  // Explicitly apply the restored choice even when it is OFF. This resolves
+  // ambiguity after a lost initial disable acknowledgement.
+  this->startup_command_state_ = StartupCommandState::WAITING_FOR_ENABLE;
+  this->startup_retry_count_ = 0;
+  this->send_enable_reporting_command_(this->restore_reporting_after_metadata_);
+  this->last_command_ms_ = millis();
 }
 
 void LD2460Component::finish_settings_transaction_(bool success) {
@@ -471,11 +543,49 @@ void LD2460Component::finish_settings_transaction_(bool success) {
   }
   if (this->restore_reporting_after_settings_) {
     this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ENABLE;
+    this->settings_retry_count_ = 0;
     this->send_enable_reporting_command_(true);
     this->last_command_ms_ = millis();
   } else {
     this->settings_command_state_ = SettingsCommandState::IDLE;
   }
+}
+
+void LD2460Component::service_settings_transaction_(uint32_t now) {
+  if (this->settings_command_state_ == SettingsCommandState::IDLE ||
+      now - this->last_command_ms_ < COMMAND_TIMEOUT_MS)
+    return;
+
+  if (this->settings_retry_count_ < MAX_COMMAND_RETRIES) {
+    this->settings_retry_count_++;
+    ESP_LOGW(TAG, "Retrying LD2460 settings transaction 0x%02X (%u/%u).",
+             this->pending_settings_command_, this->settings_retry_count_, MAX_COMMAND_RETRIES);
+    if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_DISABLE) {
+      this->send_enable_reporting_command_(false);
+    } else if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE) {
+      this->send_enable_reporting_command_(true);
+    } else if (this->pending_settings_command_ == 0x07) {
+      this->send_installation_parameters_();
+    } else if (this->pending_settings_command_ == 0x11) {
+      this->send_detection_range_();
+    } else if (this->pending_settings_command_ == 0x13) {
+      this->send_sensitivity_command_(this->pending_sensitivity_);
+    } else {
+      this->send_installation_mode_command_(this->pending_installation_mode_);
+    }
+    this->last_command_ms_ = now;
+    return;
+  }
+
+  if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE) {
+    ESP_LOGE(TAG, "No acknowledgement while restoring LD2460 reporting; ending settings transaction.");
+    this->settings_command_state_ = SettingsCommandState::IDLE;
+    this->settings_retry_count_ = 0;
+    return;
+  }
+
+  ESP_LOGW(TAG, "LD2460 settings command 0x%02X timed out.", this->pending_settings_command_);
+  this->finish_settings_transaction_(false);
 }
 
 void LD2460Component::update_angle_limits_() {
@@ -581,6 +691,14 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
     target_count = MAX_TARGETS;
   }
 
+  if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE &&
+      this->restore_reporting_after_metadata_) {
+    // A live report is stronger evidence than a lost command acknowledgement.
+    this->reporting_enabled_ = true;
+    this->startup_command_state_ = StartupCommandState::COMPLETE;
+    this->startup_retry_count_ = 0;
+  }
+
   Target targets[MAX_TARGETS]{};
   for (uint8_t i = 0; i < target_count; i++) {
     const size_t offset = 7 + i * 4;
@@ -596,7 +714,6 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
   // useful for a log or state publish. Most reports need only the raw values
   // above to determine whether state changed.
   if (!should_publish) {
-    ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
     return;
   }
 
@@ -612,8 +729,6 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
     targets[i].angle_deg = angle_deg;
 
   }
-
-  ESP_LOGD(TAG, "LD2460 report raw: %s", format_frame_(frame).c_str());
 
   if (should_publish) {
     this->publish_targets_(targets, target_count);
@@ -640,9 +755,10 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
           this->startup_command_state_ == StartupCommandState::WAITING_FOR_DISABLE && !enabled;
       const bool temporary_settings_disable =
           this->settings_command_state_ == SettingsCommandState::WAITING_FOR_DISABLE && !enabled;
-      const bool temporary_enable =
-          enabled && (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE ||
-                      this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE);
+      const bool temporary_restore =
+          (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE &&
+           enabled == this->restore_reporting_after_metadata_) ||
+          (enabled && this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE);
       ESP_LOGI(TAG, "LD2460 reporting %s: %s", enabled ? "enable" : "disable", success ? "success" : "failed");
       if (success) {
         this->reporting_enabled_ = enabled;
@@ -650,7 +766,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
         // It represents the requested reporting state, not a brief transport
         // state used to make a command transaction reliable.
         if (this->reporting_switch_ != nullptr && !temporary_startup_disable && !temporary_settings_disable &&
-            !temporary_enable)
+            !temporary_restore)
           this->reporting_switch_->publish_state(enabled);
 
         if (!enabled && !temporary_startup_disable && !temporary_settings_disable)
@@ -660,11 +776,15 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
           this->startup_command_state_ = StartupCommandState::WAITING_FOR_METADATA;
           this->startup_queries_sent_ = false;
           this->startup_query_index_ = 0;
+          this->startup_retry_count_ = 0;
           this->last_command_ms_ = millis();
-        } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE && enabled) {
+        } else if (this->startup_command_state_ == StartupCommandState::WAITING_FOR_ENABLE &&
+                   enabled == this->restore_reporting_after_metadata_) {
           this->startup_command_state_ = StartupCommandState::COMPLETE;
+          this->startup_retry_count_ = 0;
         } else if (temporary_settings_disable) {
           this->settings_command_state_ = SettingsCommandState::WAITING_FOR_ACK;
+          this->settings_retry_count_ = 0;
           if (this->pending_settings_command_ == 0x07)
             this->send_installation_parameters_();
           else if (this->pending_settings_command_ == 0x11)
@@ -676,6 +796,7 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
           this->last_command_ms_ = millis();
         } else if (this->settings_command_state_ == SettingsCommandState::WAITING_FOR_ENABLE && enabled) {
           this->settings_command_state_ = SettingsCommandState::IDLE;
+          this->settings_retry_count_ = 0;
         }
       }
       break;

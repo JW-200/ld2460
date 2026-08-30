@@ -106,6 +106,9 @@ class LD2460Component : public Component, public uart::UARTDevice {
 
   void send_startup_commands_();
   void send_startup_queries_();
+  void resend_startup_query_();
+  void service_startup_transaction_(uint32_t now);
+  void service_settings_transaction_(uint32_t now);
   void advance_startup_query_(uint8_t response_function_code);
   void send_enable_reporting_command_(bool enabled = true);
   void send_query_version_command_();
@@ -175,6 +178,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool startup_query_waiting_{false};
   uint8_t startup_query_index_{0};
   uint8_t startup_expected_response_function_{0};
+  uint8_t startup_retry_count_{0};
   bool firmware_response_received_{false};
   bool installation_mode_response_received_{false};
   bool installation_parameters_response_received_{false};
@@ -191,6 +195,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   uint8_t pending_settings_command_{0};
   uint8_t pending_installation_mode_{1};
   uint8_t pending_sensitivity_{2};
+  uint8_t settings_retry_count_{0};
   uint32_t no_data_log_interval_ms_{10000};
 };
 
