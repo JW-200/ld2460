@@ -1,7 +1,6 @@
 substitutions:
   # Package release. Keep this in sync with the Git tag and CHANGELOG.md.
   ld2460_package_version: v0.1.1
-  ld2460_external_components_source: github://smarthomeshop/ld2460@v0.1.1
   ld2460_bus_id: ld2460_bus
   ld2460_component_id: ld2460_radar
   ld2460_tx_pin: GPIO16
@@ -9,9 +8,10 @@ substitutions:
   ld2460_publish_interval: 500ms
 
 external_components:
-  - source: ${ld2460_external_components_source}
+  - source:
+      type: local
+      path: components
     components: [ld2460]
-    refresh: 1d
 
 uart:
   - id: ${ld2460_bus_id}
