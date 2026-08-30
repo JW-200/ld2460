@@ -1,11 +1,80 @@
 substitutions:
-  # Package release. Keep this in sync with the Git tag and CHANGELOG.md.
+  name: "ld2460-bedroom-jonas"
+  friendly_name: "LD2460 Bedroom Jonas"
+  scd41_temperature_offset: 20
+  sda_pin: "GPIO06"
+  scl_pin: "GPIO07"
+  illuminance_update_interval: "10s"
   ld2460_package_version: v0.1.1
   ld2460_bus_id: ld2460_bus
   ld2460_component_id: ld2460_radar
   ld2460_tx_pin: GPIO16
   ld2460_rx_pin: GPIO17
   ld2460_publish_interval: 500ms
+
+esphome:
+  name: ${name}
+  comment: ${friendly_name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: True
+
+esp32:
+  board: adafruit_feather_esp32c6
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_DETECT: y
+      COMPILER_OPTIMIZATION_SIZE: y
+      
+network:
+  enable_ipv6: False
+
+logger:
+
+api:
+  encryption:
+    key: "9ZLK+r+6+yhvU9oxq6sBRphJQVfHLj+wianJMrjUxMs="
+
+ota:
+  - platform: esphome
+    password: "cbda70ba357fc01a8a1c49c238993815"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 192.168.3.15
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Etest Fallback Hotspot"
+    password: "EuP4LBfkJCVD"
+
+button:
+  - platform: restart
+    icon: mdi:power-cycle
+    name: "ESP Reboot"
+    entity_category: config
+  - platform: factory_reset
+    id: "factory_reset_button"
+    internal: True
+
+uart:
+  id: ${ld2460_bus_id}
+  tx_pin: ${ld2460_tx_pin}
+  rx_pin: ${ld2460_rx_pin}
+  baud_rate: 115200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 1024
+
+i2c:
+  - id: i2c_bus
+    sda: ${sda_pin}
+    scl: ${scl_pin}
+
+
 
 external_components:
   - source:
@@ -101,3 +170,9 @@ ld2460:
       name: "Target 5 Distance"
     angle:
       name: "Target 5 Angle"
+
+
+packages:
+  bh1750: !include common/bh1750.yaml
+  co2: !include common/co2.yaml
+  bluetooth_base: !include common/bluetooth.yaml
