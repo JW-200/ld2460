@@ -6,7 +6,7 @@ substitutions:
   ld2460_component_id: ld2460_radar
   ld2460_tx_pin: GPIO16
   ld2460_rx_pin: GPIO17
-  ld2460_publish_interval: 500ms
+  ld2460_publish_interval: 5s
 
 external_components:
   - source: ${ld2460_external_components_source}

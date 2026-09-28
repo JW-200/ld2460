@@ -19,7 +19,6 @@ static const uint8_t MAX_COMMAND_RETRIES = 2;
 // Do not let a continuously busy UART monopolize ESPHome's main loop.  The
 // remaining bytes stay in the UART driver's ring buffer for the next loop.
 static const size_t MAX_BYTES_PER_LOOP = 128;
-
 void LD2460ReportingSwitch::write_state(bool state) {
   if (this->parent_ != nullptr)
     this->parent_->set_reporting(state);
@@ -61,6 +60,11 @@ void LD2460Component::dump_config() {
   ESP_LOGCONFIG(TAG, "  Baud scan: %s", YESNO(this->baud_scan_));
   ESP_LOGCONFIG(TAG, "  No-data log interval: %" PRIu32 " ms", this->no_data_log_interval_ms_);
   ESP_LOGCONFIG(TAG, "  Publish interval: %" PRIu32 " ms", this->publish_interval_ms_);
+  ESP_LOGCONFIG(TAG, "  Position update threshold: %u dm", static_cast<unsigned>(this->position_update_threshold_dm_));
+  ESP_LOGCONFIG(TAG, "  Presence timeout: %" PRIu32 " ms", this->presence_tracker_.get_presence_timeout());
+  ESP_LOGCONFIG(TAG, "  Stationary dwell: %" PRIu32 " ms", this->presence_tracker_.get_stationary_dwell());
+  ESP_LOGCONFIG(TAG, "  Stationary presence timeout: %" PRIu32 " ms",
+                this->presence_tracker_.get_stationary_presence_timeout());
   this->check_uart_settings(115200, 1, uart::UART_CONFIG_PARITY_NONE, 8);
   LOG_TEXT_SENSOR("  ", "Firmware", this->firmware_text_sensor_);
   LOG_TEXT_SENSOR("  ", "Installation Mode", this->installation_mode_text_sensor_);
@@ -707,6 +711,9 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
   }
 
   const uint32_t now = millis();
+  // Occupancy uses every valid radar report. Network publication of coordinates
+  // is intentionally slower and must never delay a presence transition.
+  this->update_presence_tracks_(targets, target_count, now);
   const bool should_publish = this->target_state_changed_(targets, target_count) &&
                               now - this->last_publish_ms_ >= this->publish_interval_ms_;
 
@@ -732,8 +739,6 @@ void LD2460Component::process_report_frame_(const std::vector<uint8_t> &frame) {
 
   if (should_publish) {
     this->publish_targets_(targets, target_count);
-    this->remember_published_targets_(targets, target_count);
-
     this->last_publish_ms_ = now;
   }
 }
@@ -930,27 +935,44 @@ void LD2460Component::process_command_frame_(const std::vector<uint8_t> &frame) 
 
 }
 
+void LD2460Component::publish_presence_(bool present) {
+  if (this->presence_state_known_ && this->presence_state_ == present)
+    return;
+  this->presence_state_known_ = true;
+  this->presence_state_ = present;
+  if (this->presence_binary_sensor_ != nullptr)
+    this->presence_binary_sensor_->publish_state(present);
+}
+
+void LD2460Component::update_presence_tracks_(const Target *targets, uint8_t target_count, uint32_t now) {
+  PresenceTracker::Point points[MAX_TARGETS]{};
+  for (uint8_t i = 0; i < target_count; i++) {
+    points[i].x = targets[i].raw_x;
+    points[i].y = targets[i].raw_y;
+  }
+  this->publish_presence_(this->presence_tracker_.update(points, target_count, now));
+}
+
+bool LD2460Component::target_moved_for_publish_(const Target &current, const Target &previous) const {
+  const int64_t threshold_sq = static_cast<int64_t>(this->position_update_threshold_dm_) *
+                               this->position_update_threshold_dm_;
+  const int32_t dx = static_cast<int32_t>(current.raw_x) - previous.raw_x;
+  const int32_t dy = static_cast<int32_t>(current.raw_y) - previous.raw_y;
+  return static_cast<int64_t>(dx) * dx + static_cast<int64_t>(dy) * dy >= threshold_sq;
+}
+
 void LD2460Component::publish_targets_(const Target *targets, uint8_t target_count) {
   const bool count_changed = !this->has_published_targets_ || target_count != this->last_published_target_count_;
-
-  if (count_changed) {
-    if (this->presence_binary_sensor_ != nullptr)
-      this->presence_binary_sensor_->publish_state(target_count > 0);
-
-    if (this->target_count_sensor_ != nullptr)
-      this->target_count_sensor_->publish_state(target_count);
-  }
+  if (count_changed && this->target_count_sensor_ != nullptr)
+    this->target_count_sensor_->publish_state(target_count);
 
   for (uint8_t i = 0; i < MAX_TARGETS; i++) {
     const bool present = i < target_count;
     const bool was_present = this->has_published_targets_ && i < this->last_published_target_count_;
-    const bool coordinates_changed =
-        present && (!was_present || targets[i].raw_x != this->last_published_targets_[i].raw_x ||
-                    targets[i].raw_y != this->last_published_targets_[i].raw_y);
-
-    // Publish only slots that appeared, moved, or disappeared. Movement of one
-    // target must not republish every other occupied target.
-    if (!coordinates_changed && !(was_present && !present))
+    const bool moved = present &&
+                       (count_changed || !was_present ||
+                        this->target_moved_for_publish_(targets[i], this->last_published_targets_[i]));
+    if (!moved && !(was_present && !present))
       continue;
 
     const float x = present ? targets[i].x_m : NAN;
@@ -958,7 +980,6 @@ void LD2460Component::publish_targets_(const Target *targets, uint8_t target_cou
     const float distance = present ? targets[i].distance_m : NAN;
     const float angle = present ? targets[i].angle_deg : NAN;
     const auto target = this->target_sensors_[i];
-
     if (target.x != nullptr)
       target.x->publish_state(x);
     if (target.y != nullptr)
@@ -967,15 +988,19 @@ void LD2460Component::publish_targets_(const Target *targets, uint8_t target_cou
       target.distance->publish_state(distance);
     if (target.angle != nullptr)
       target.angle->publish_state(angle);
+    this->last_published_targets_[i] = present ? targets[i] : Target{};
   }
+  this->last_published_target_count_ = target_count;
+  this->has_published_targets_ = true;
 }
 
 void LD2460Component::clear_tracking_states_() {
-  if (this->presence_binary_sensor_ != nullptr)
-    this->presence_binary_sensor_->publish_state(false);
-  if (this->target_count_sensor_ != nullptr)
+  this->publish_presence_(false);
+  if (this->target_count_sensor_ != nullptr &&
+      (!this->has_published_targets_ || this->last_published_target_count_ != 0))
     this->target_count_sensor_->publish_state(0);
-  for (auto &target : this->target_sensors_) {
+  for (uint8_t i = 0; i < this->last_published_target_count_; i++) {
+    const auto target = this->target_sensors_[i];
     if (target.x != nullptr)
       target.x->publish_state(NAN);
     if (target.y != nullptr)
@@ -985,34 +1010,21 @@ void LD2460Component::clear_tracking_states_() {
     if (target.angle != nullptr)
       target.angle->publish_state(NAN);
   }
-
+  this->presence_tracker_.clear();
+  for (auto &target : this->last_published_targets_)
+    target = Target{};
   this->last_published_target_count_ = 0;
-  this->has_published_targets_ = false;
+  this->has_published_targets_ = true;
 }
 
 bool LD2460Component::target_state_changed_(const Target *targets, uint8_t target_count) const {
-  if (!this->has_published_targets_)
+  if (!this->has_published_targets_ || target_count != this->last_published_target_count_)
     return true;
-
-  if (target_count != this->last_published_target_count_)
-    return true;
-
   for (uint8_t i = 0; i < target_count; i++) {
-    if (targets[i].raw_x != this->last_published_targets_[i].raw_x ||
-        targets[i].raw_y != this->last_published_targets_[i].raw_y) {
+    if (this->target_moved_for_publish_(targets[i], this->last_published_targets_[i]))
       return true;
-    }
   }
-
   return false;
-}
-
-void LD2460Component::remember_published_targets_(const Target *targets, uint8_t target_count) {
-  this->last_published_target_count_ = target_count;
-  for (uint8_t i = 0; i < MAX_TARGETS; i++) {
-    this->last_published_targets_[i] = i < target_count ? targets[i] : Target{};
-  }
-  this->has_published_targets_ = true;
 }
 
 void LD2460Component::flush_unparsed_buffer_() {

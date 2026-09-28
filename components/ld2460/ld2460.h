@@ -1,5 +1,7 @@
 #pragma once
 
+#include "presence_tracker.h"
+
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/number/number.h"
@@ -35,6 +37,7 @@ class LD2460ReportingSwitch : public switch_::Switch, public Component {
 class LD2460Component : public Component, public uart::UARTDevice {
  public:
   static const uint8_t MAX_TARGETS = 5;
+  static_assert(MAX_TARGETS == PresenceTracker::MAX_TRACKS, "Presence tracker must match radar target capacity");
 
   void setup() override;
   void loop() override;
@@ -71,6 +74,14 @@ class LD2460Component : public Component, public uart::UARTDevice {
     this->no_data_log_interval_ms_ = no_data_log_interval_ms;
   }
   void set_publish_interval(uint32_t publish_interval_ms) { this->publish_interval_ms_ = publish_interval_ms; }
+  void set_presence_timeout(uint32_t timeout_ms) { this->presence_tracker_.set_presence_timeout(timeout_ms); }
+  void set_stationary_presence_timeout(uint32_t timeout_ms) {
+    this->presence_tracker_.set_stationary_presence_timeout(timeout_ms);
+  }
+  void set_stationary_dwell(uint32_t dwell_ms) { this->presence_tracker_.set_stationary_dwell(dwell_ms); }
+  void set_position_update_threshold(float threshold_m) {
+    this->position_update_threshold_dm_ = static_cast<uint16_t>(threshold_m * 10.0f + 0.5f);
+  }
 
  protected:
   struct TargetSensors {
@@ -124,9 +135,11 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void process_report_frame_(const std::vector<uint8_t> &frame);
   void process_command_frame_(const std::vector<uint8_t> &frame);
   void publish_targets_(const Target *targets, uint8_t target_count);
+  void update_presence_tracks_(const Target *targets, uint8_t target_count, uint32_t now);
+  void publish_presence_(bool present);
   void clear_tracking_states_();
   bool target_state_changed_(const Target *targets, uint8_t target_count) const;
-  void remember_published_targets_(const Target *targets, uint8_t target_count);
+  bool target_moved_for_publish_(const Target &current, const Target &previous) const;
   void flush_unparsed_buffer_();
   static std::string format_frame_(const std::vector<uint8_t> &bytes);
   static bool is_report_header_(const std::vector<uint8_t> &bytes);
@@ -154,6 +167,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   LD2460SensitivitySelect *sensitivity_select_{nullptr};
   TargetSensors target_sensors_[MAX_TARGETS]{};
   Target last_published_targets_[MAX_TARGETS]{};
+  PresenceTracker presence_tracker_{};
   std::vector<uint8_t> rx_buffer_{};
   std::vector<uint8_t> frame_buffer_{};
   uint32_t flush_timeout_ms_{100};
@@ -163,7 +177,8 @@ class LD2460Component : public Component, public uart::UARTDevice {
   uint32_t last_no_data_log_ms_{0};
   uint32_t last_command_ms_{0};
   uint32_t last_publish_ms_{0};
-  uint32_t publish_interval_ms_{500};
+  uint32_t publish_interval_ms_{5000};
+  uint16_t position_update_threshold_dm_{5};
   uint8_t last_published_target_count_{0};
   uint8_t baud_index_{0};
   uint8_t installation_mode_{1};
@@ -190,6 +205,8 @@ class LD2460Component : public Component, public uart::UARTDevice {
   bool restore_reporting_after_metadata_{true};
   bool restore_reporting_after_settings_{false};
   bool has_published_targets_{false};
+  bool presence_state_known_{false};
+  bool presence_state_{false};
   StartupCommandState startup_command_state_{StartupCommandState::IDLE};
   SettingsCommandState settings_command_state_{SettingsCommandState::IDLE};
   uint8_t pending_settings_command_{0};

@@ -30,6 +30,10 @@ CONF_FLUSH_TIMEOUT = "flush_timeout"
 CONF_MAX_BUFFER_SIZE = "max_buffer_size"
 CONF_NO_DATA_LOG_INTERVAL = "no_data_log_interval"
 CONF_PUBLISH_INTERVAL = "publish_interval"
+CONF_PRESENCE_TIMEOUT = "presence_timeout"
+CONF_STATIONARY_PRESENCE_TIMEOUT = "stationary_presence_timeout"
+CONF_STATIONARY_DWELL = "stationary_dwell"
+CONF_POSITION_UPDATE_THRESHOLD = "position_update_threshold"
 CONF_REPORTING = "reporting"
 CONF_PRESENCE = "presence"
 CONF_TARGET_COUNT = "target_count"
@@ -75,6 +79,13 @@ TARGET_SCHEMA = cv.Schema(
         ),
     }
 )
+
+def validate_presence_timeouts(config):
+    if (config[CONF_STATIONARY_PRESENCE_TIMEOUT].total_milliseconds <
+            config[CONF_PRESENCE_TIMEOUT].total_milliseconds):
+        raise cv.Invalid("stationary_presence_timeout must be at least presence_timeout")
+    return config
+
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
@@ -125,11 +136,16 @@ CONFIG_SCHEMA = cv.All(
             # The shortest valid protocol frame is 11 bytes.
             cv.Optional(CONF_MAX_BUFFER_SIZE, default=48): cv.int_range(min=11, max=512),
             cv.Optional(CONF_NO_DATA_LOG_INTERVAL, default="10s"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_PUBLISH_INTERVAL, default="500ms"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_PUBLISH_INTERVAL, default="5s"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_PRESENCE_TIMEOUT, default="30s"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_STATIONARY_PRESENCE_TIMEOUT, default="10min"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_STATIONARY_DWELL, default="30s"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_POSITION_UPDATE_THRESHOLD, default=0.5): cv.float_range(min=0.1, max=5.0),
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
-    .extend(uart.UART_DEVICE_SCHEMA)
+    .extend(uart.UART_DEVICE_SCHEMA),
+    validate_presence_timeouts,
 )
 
 FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
@@ -223,3 +239,7 @@ async def to_code(config):
     cg.add(var.set_baud_scan(config[CONF_BAUD_SCAN]))
     cg.add(var.set_no_data_log_interval(config[CONF_NO_DATA_LOG_INTERVAL].total_milliseconds))
     cg.add(var.set_publish_interval(config[CONF_PUBLISH_INTERVAL].total_milliseconds))
+    cg.add(var.set_presence_timeout(config[CONF_PRESENCE_TIMEOUT].total_milliseconds))
+    cg.add(var.set_stationary_presence_timeout(config[CONF_STATIONARY_PRESENCE_TIMEOUT].total_milliseconds))
+    cg.add(var.set_stationary_dwell(config[CONF_STATIONARY_DWELL].total_milliseconds))
+    cg.add(var.set_position_update_threshold(config[CONF_POSITION_UPDATE_THRESHOLD]))
