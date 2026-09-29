@@ -138,7 +138,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_NO_DATA_LOG_INTERVAL, default="10s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_PUBLISH_INTERVAL, default="5s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_PRESENCE_TIMEOUT, default="30s"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_STATIONARY_PRESENCE_TIMEOUT, default="10min"): cv.positive_time_period_milliseconds,
+            cv.Optional(CONF_STATIONARY_PRESENCE_TIMEOUT, default="30min"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_STATIONARY_DWELL, default="30s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_POSITION_UPDATE_THRESHOLD, default=0.5): cv.float_range(min=0.1, max=5.0),
         }

@@ -106,6 +106,11 @@ void LD2460Component::loop() {
 
   this->process_rx_buffer_();
 
+  // Reports can stop entirely while a stationary target is hidden. Age the
+  // tracks even without another target frame so presence eventually clears.
+  if (this->presence_state_)
+    this->publish_presence_(this->presence_tracker_.update(nullptr, 0, millis()));
+
   if (!this->rx_buffer_.empty() && now - this->last_byte_ms_ >= this->flush_timeout_ms_)
     this->flush_unparsed_buffer_();
 

@@ -61,10 +61,21 @@ class PresenceTracker {
       auto &track = this->tracks_[best_track];
       const auto &point = points[best_point];
       if (squared_distance_(point, track.anchor) > STATIONARY_RADIUS_SQ) {
-        track.anchor = point;
-        track.stationary_since_ms = now;
-        track.stationary = false;
-      } else if (now - track.stationary_since_ms >= this->stationary_dwell_ms_) {
+        // A single displaced radar report must not erase a long stationary
+        // stay. Require sustained movement before starting a new dwell.
+        if (!track.moving || now - track.last_seen_ms >= MOVING_DWELL_MS) {
+          track.moving = true;
+          track.moving_since_ms = now;
+        } else if (now - track.moving_since_ms >= MOVING_DWELL_MS) {
+          track.anchor = point;
+          track.stationary_since_ms = now;
+          track.stationary = false;
+          track.moving = false;
+        }
+      } else {
+        track.moving = false;
+      }
+      if (!track.moving && now - track.stationary_since_ms >= this->stationary_dwell_ms_) {
         track.stationary = true;
       }
       track.position = point;
@@ -124,12 +135,15 @@ class PresenceTracker {
     Point anchor{};
     uint32_t last_seen_ms{0};
     uint32_t stationary_since_ms{0};
+    uint32_t moving_since_ms{0};
     bool active{false};
     bool stationary{false};
+    bool moving{false};
   };
 
   static const int64_t MATCH_RADIUS_SQ = 12 * 12;  // 1.2 m
   static const int64_t STATIONARY_RADIUS_SQ = 6 * 6;  // 0.6 m
+  static const uint32_t MOVING_DWELL_MS = 5000;
 
   static int64_t squared_distance_(const Point &a, const Point &b) {
     const int32_t dx = static_cast<int32_t>(a.x) - b.x;
@@ -143,7 +157,7 @@ class PresenceTracker {
 
   Track tracks_[MAX_TRACKS]{};
   uint32_t presence_timeout_ms_{30000};
-  uint32_t stationary_presence_timeout_ms_{600000};
+  uint32_t stationary_presence_timeout_ms_{1800000};
   uint32_t stationary_dwell_ms_{30000};
 };
 
