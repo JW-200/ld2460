@@ -1,0 +1,14 @@
+# Optional package: include alongside ld2460.yaml to explicitly expose details.
+# These describe radar slots, not persistent people identities.
+ld2460:
+  target_1:
+    x:
+      name: Target 1 X
+    y:
+      name: Target 1 Y
+    distance:
+      name: Target 1 Distance
+    angle:
+      name: Target 1 Angle
+
+# Add target_2 through target_5 only if you need them.
