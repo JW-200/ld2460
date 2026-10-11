@@ -1,6 +1,7 @@
 #pragma once
 
 #include "presence_tracker.h"
+#include "protocol.h"
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
@@ -10,6 +11,7 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
+#include "esphome/core/preferences.h"
 
 #include <cstdint>
 #include <string>
@@ -19,6 +21,31 @@ namespace esphome {
 namespace ld2460 {
 
 class LD2460Component;
+class LD2460TrackingNumber : public number::Number {
+ public:
+  void set_parent(LD2460Component *parent) { this->parent_ = parent; }
+  void set_field(uint8_t field) { this->field_ = field; }
+ protected:
+  void control(float value) override;
+  LD2460Component *parent_{nullptr};
+  uint8_t field_{0};
+};
+class LD2460ExitEdgeSelect : public select::Select {
+ public:
+  void set_parent(LD2460Component *parent) { this->parent_ = parent; }
+  void set_slot(uint8_t slot) { this->slot_ = slot; }
+ protected:
+  void control(const std::string &value) override;
+  LD2460Component *parent_{nullptr};
+  uint8_t slot_{0};
+};
+class LD2460ZoneSwitch : public switch_::Switch {
+ public:
+  void set_parent(LD2460Component *parent) { this->parent_ = parent; }
+ protected:
+  void write_state(bool state) override;
+  LD2460Component *parent_{nullptr};
+};
 class LD2460ConfigNumber : public number::Number { public: void set_parent(LD2460Component *p) { parent_ = p; } void set_field(uint8_t f) { field_ = f; } protected: void control(float value) override; LD2460Component *parent_{nullptr}; uint8_t field_{0}; };
 class LD2460InstallationModeSelect : public select::Select { public: void set_parent(LD2460Component *p) { parent_ = p; } protected: void control(const std::string &value) override; LD2460Component *parent_{nullptr}; };
 class LD2460SensitivitySelect : public select::Select { public: void set_parent(LD2460Component *p) { parent_ = p; } protected: void control(const std::string &value) override; LD2460Component *parent_{nullptr}; };
@@ -37,6 +64,7 @@ class LD2460ReportingSwitch : public switch_::Switch, public Component {
 class LD2460Component : public Component, public uart::UARTDevice {
  public:
   static const uint8_t MAX_TARGETS = 5;
+  static constexpr uint8_t TRACKING_FIELDS = 15;
   static_assert(MAX_TARGETS == PresenceTracker::MAX_TRACKS, "Presence tracker must match radar target capacity");
 
   void setup() override;
@@ -57,6 +85,16 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void set_reporting_switch(LD2460ReportingSwitch *reporting_switch) { this->reporting_switch_ = reporting_switch; }
   void set_reporting(bool enabled);
   void restore_reporting(bool enabled);
+  void set_tracking_preference_key(const std::string &id);
+  void set_tracking_initial_value(uint8_t field, float value) { this->tracking_settings_.values[field] = value; }
+  void set_tracking_number(uint8_t field, LD2460TrackingNumber *control) { this->tracking_numbers_[field] = control; }
+  void set_exit_edge_select(uint8_t slot, LD2460ExitEdgeSelect *control) { this->exit_edge_selects_[slot] = control; }
+  void set_zone_switch(LD2460ZoneSwitch *control) { this->zone_switch_ = control; }
+  void set_zone_initial_enabled(bool value) { this->tracking_settings_.zone_enabled = value; }
+  void set_tracking_value(uint8_t field, float value);
+  void set_zone_enabled(bool enabled);
+  void set_radar_available_sensor(binary_sensor::BinarySensor *sensor) { this->radar_available_sensor_ = sensor; }
+  void set_radar_health_timeout(uint32_t value) { this->radar_health_timeout_ms_ = value; }
   void set_config_number(uint8_t field, LD2460ConfigNumber *control) { if (field < 5) this->config_numbers_[field] = control; }
   void set_installation_mode_select(LD2460InstallationModeSelect *control) { this->installation_mode_select_ = control; }
   void set_sensitivity_select(LD2460SensitivitySelect *control) { this->sensitivity_select_ = control; }
@@ -74,11 +112,13 @@ class LD2460Component : public Component, public uart::UARTDevice {
     this->no_data_log_interval_ms_ = no_data_log_interval_ms;
   }
   void set_publish_interval(uint32_t publish_interval_ms) { this->publish_interval_ms_ = publish_interval_ms; }
-  void set_presence_timeout(uint32_t timeout_ms) { this->presence_tracker_.set_presence_timeout(timeout_ms); }
+  void set_presence_timeout(uint32_t timeout_ms) { this->tracking_settings_.values[10] = timeout_ms / 1000.0f; }
   void set_stationary_presence_timeout(uint32_t timeout_ms) {
-    this->presence_tracker_.set_stationary_presence_timeout(timeout_ms);
+    this->tracking_settings_.values[11] = timeout_ms / 1000.0f;
   }
-  void set_stationary_dwell(uint32_t dwell_ms) { this->presence_tracker_.set_stationary_dwell(dwell_ms); }
+  void set_stationary_dwell(uint32_t dwell_ms) { this->tracking_settings_.values[12] = dwell_ms / 1000.0f; }
+  void set_exit_timeout(uint32_t timeout_ms) { this->tracking_settings_.values[13] = timeout_ms / 1000.0f; }
+  void set_edge_margin(float value) { this->tracking_settings_.values[14] = value; }
   void set_position_update_threshold(float threshold_m) {
     this->position_update_threshold_dm_ = static_cast<uint16_t>(threshold_m * 10.0f + 0.5f);
   }
@@ -130,6 +170,8 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void finish_metadata_queries_();
   void finish_settings_transaction_(bool success);
   void update_angle_limits_();
+  void apply_installation_mode_(uint8_t mode);
+  void send_protocol_command_(const std::vector<uint8_t> &command);
   void select_next_baud_rate_();
   void process_rx_buffer_();
   void process_report_frame_(const std::vector<uint8_t> &frame);
@@ -137,15 +179,19 @@ class LD2460Component : public Component, public uart::UARTDevice {
   void publish_targets_(const Target *targets, uint8_t target_count);
   void update_presence_tracks_(const Target *targets, uint8_t target_count, uint32_t now);
   void publish_presence_(bool present);
+  void publish_tracking_state_();
+  void invalidate_tracking_states_();
+  void apply_tracking_settings_(bool geometry_changed);
+  void publish_tracking_settings_();
+  bool valid_tracking_settings_() const;
+  void update_radar_boundary_();
+  void note_radar_response_();
+  void service_radar_health_(uint32_t now);
   void clear_tracking_states_();
   bool target_state_changed_(const Target *targets, uint8_t target_count) const;
   bool target_moved_for_publish_(const Target &current, const Target &previous) const;
   void flush_unparsed_buffer_();
   static std::string format_frame_(const std::vector<uint8_t> &bytes);
-  static bool is_report_header_(const std::vector<uint8_t> &bytes);
-  static bool is_command_header_(const std::vector<uint8_t> &bytes);
-  static bool has_report_footer_(const std::vector<uint8_t> &bytes);
-  static bool has_command_footer_(const std::vector<uint8_t> &bytes);
   static uint16_t read_u16_le_(const std::vector<uint8_t> &bytes, size_t index);
   static int16_t read_i16_le_(const std::vector<uint8_t> &bytes, size_t index);
   static const char *installation_mode_to_string_(uint8_t mode);
@@ -168,6 +214,25 @@ class LD2460Component : public Component, public uart::UARTDevice {
   TargetSensors target_sensors_[MAX_TARGETS]{};
   Target last_published_targets_[MAX_TARGETS]{};
   PresenceTracker presence_tracker_{};
+  struct TrackingSettings {
+    float values[TRACKING_FIELDS]{-3, 0, 3, 0, 3, 6, -3, 6, 0, 0, 20, 3600, 10, 5, 0.5f};
+    bool zone_enabled{false};
+  } tracking_settings_{};
+  ESPPreferenceObject tracking_preference_{};
+  uint32_t tracking_preference_key_{0};
+  LD2460TrackingNumber *tracking_numbers_[TRACKING_FIELDS]{};
+  LD2460ExitEdgeSelect *exit_edge_selects_[2]{};
+  LD2460ZoneSwitch *zone_switch_{nullptr};
+  binary_sensor::BinarySensor *radar_available_sensor_{nullptr};
+  uint32_t last_radar_response_ms_{0};
+  uint32_t last_health_probe_ms_{0};
+  uint32_t radar_health_timeout_ms_{90000};
+  uint8_t last_published_presence_count_{0};
+  bool presence_count_known_{false};
+  bool radar_response_seen_{false};
+  bool radar_available_{false};
+  bool radar_availability_known_{false};
+  bool health_probe_active_{false};
   std::vector<uint8_t> rx_buffer_{};
   std::vector<uint8_t> frame_buffer_{};
   uint32_t flush_timeout_ms_{100};
@@ -210,6 +275,7 @@ class LD2460Component : public Component, public uart::UARTDevice {
   StartupCommandState startup_command_state_{StartupCommandState::IDLE};
   SettingsCommandState settings_command_state_{SettingsCommandState::IDLE};
   uint8_t pending_settings_command_{0};
+  float pending_config_values_[5]{};
   uint8_t pending_installation_mode_{1};
   uint8_t pending_sensitivity_{2};
   uint8_t settings_retry_count_{0};

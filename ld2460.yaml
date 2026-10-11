@@ -1,7 +1,7 @@
 substitutions:
-  # Package release. Keep this in sync with the Git tag and CHANGELOG.md.
-  ld2460_package_version: v0.1.1
-  ld2460_external_components_source: github://smarthomeshop/ld2460@v0.1.1
+  # Defaults to this checkout. Override with a published github:// source when
+  # using the package remotely; the new tracking options need matching code.
+  ld2460_external_components_source: components
   ld2460_bus_id: ld2460_bus
   ld2460_component_id: ld2460_radar
   ld2460_tx_pin: GPIO16
@@ -31,21 +31,63 @@ ld2460:
   max_buffer_size: 48
   no_data_log_interval: 10s
   publish_interval: ${ld2460_publish_interval}
+  presence_timeout: 20s
+  stationary_presence_timeout: 60min
+  stationary_dwell: 10s
+  exit_timeout: 5s
+  edge_margin: 0.5
+  radar_health_timeout: 90s
   presence:
     name: "Presence"
   target_count:
     name: "Target Count"
+  radar_available:
+    name: "Radar Available"
   reporting:
-    name: "Reporting"
+    name: "Radar Reporting"
+    entity_category: diagnostic
+    disabled_by_default: true
     restore_mode: RESTORE_DEFAULT_ON
+  tracking:
+    zone_enabled:
+      name: "Room Tracking Zone"
+      initial_state: false
+    point_1_x:
+      name: "Room Point 1 X"
+    point_1_y:
+      name: "Room Point 1 Y"
+    point_2_x:
+      name: "Room Point 2 X"
+    point_2_y:
+      name: "Room Point 2 Y"
+    point_3_x:
+      name: "Room Point 3 X"
+    point_3_y:
+      name: "Room Point 3 Y"
+    point_4_x:
+      name: "Room Point 4 X"
+    point_4_y:
+      name: "Room Point 4 Y"
+    exit_edge_1:
+      name: "Room Exit Edge 1"
+    exit_edge_2:
+      name: "Room Exit Edge 2"
+    presence_timeout:
+      name: "Presence Hold"
+    stationary_presence_timeout:
+      name: "Stationary Presence Hold"
+    stationary_dwell:
+      name: "Stationary Qualification Time"
+    exit_timeout:
+      name: "Exit Hold"
+    edge_margin:
+      name: "Exit Edge Margin"
   firmware:
     name: "Radar Firmware"
   installation_mode:
     name: "Installation Mode"
   installation_mode_select:
     name: "Installation Mode Setting"
-  sensitivity:
-    name: "Radar Sensitivity"
   installation_height:
     name: "Installation Height"
   installation_angle:
@@ -56,48 +98,3 @@ ld2460:
     name: "Detection Start Angle"
   end_angle:
     name: "Detection End Angle"
-  target_1:
-    x:
-      name: "Target 1 X"
-    y:
-      name: "Target 1 Y"
-    distance:
-      name: "Target 1 Distance"
-    angle:
-      name: "Target 1 Angle"
-  target_2:
-    x:
-      name: "Target 2 X"
-    y:
-      name: "Target 2 Y"
-    distance:
-      name: "Target 2 Distance"
-    angle:
-      name: "Target 2 Angle"
-  target_3:
-    x:
-      name: "Target 3 X"
-    y:
-      name: "Target 3 Y"
-    distance:
-      name: "Target 3 Distance"
-    angle:
-      name: "Target 3 Angle"
-  target_4:
-    x:
-      name: "Target 4 X"
-    y:
-      name: "Target 4 Y"
-    distance:
-      name: "Target 4 Distance"
-    angle:
-      name: "Target 4 Angle"
-  target_5:
-    x:
-      name: "Target 5 X"
-    y:
-      name: "Target 5 Y"
-    distance:
-      name: "Target 5 Distance"
-    angle:
-      name: "Target 5 Angle"
