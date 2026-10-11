@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>LD2460 · Room visualizer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="geometry.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="page-header">
+    <div><p class="eyebrow">LD2460 / PLANNING TOOL</p><h1>Room visualizer<span>.</span></h1></div>
+  </header>
+  <main>
+    <section class="map-card" aria-label="Room plan">
+      <div class="map-heading"><div><h2>Your room, from above</h2><p>Drag the corners or enter their radar coordinates.</p></div><button id="fit" type="button">Fit view</button></div>
+      <div class="canvas-wrap">
+        <svg id="plan" viewBox="0 0 900 720" role="img" aria-label="Top-down radar room plan. X directions are from someone facing the radar. At zero heading, positive X is page-left, negative X is page-right, and positive Y is up.">
+          <title>Radar coordinate visualizer</title>
+          <defs>
+            <marker id="arrow-x" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#ffbe79"/></marker>
+            <marker id="arrow-y" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#65dfba"/></marker>
+          </defs>
+          <g id="grid"></g><g id="coverage"></g><g id="room"></g><g id="person-ray"></g><g id="axes"></g><g id="device"></g><g id="corners"></g><g id="person"></g><g id="probe"></g>
+        </svg>
+        <div class="map-key"><span><i class="room-dot"></i>Room zone</span><span><i class="person-dot"></i>You</span><span><i class="coverage-dot"></i>Illustrative radar sector</span><span>Grid: 1 m</span></div>
+      </div>
+      <div class="map-footer"><span id="cursor">Move over the plan to read radar X / Y.</span><span id="area">—</span></div>
+    </section>
+    <aside class="controls" aria-label="Visualizer settings">
+      <section class="control-section">
+        <div class="section-heading"><span class="step">01</span><h2>Device angle</h2></div>
+        <label class="angle-label" for="heading">Plan rotation <span><input id="heading" type="number" min="-180" max="180" step="1" value="0" aria-label="Device heading in degrees"> °</span></label>
+        <input id="heading-range" type="range" min="-180" max="180" step="1" value="0" aria-label="Device heading slider">
+        <div class="range-labels"><span>−180°</span><span>0° · forward ↑</span><span>+180°</span></div>
+        <p class="help">Positive angles turn clockwise; +90° points right on the plan. This is a top-down heading, not installation tilt. Corner values stay relative to the radar.</p>
+      </section>
+      <section class="control-section">
+        <div class="section-heading"><span class="step">02</span><h2>Four corners</h2><span class="unit">METRES</span></div>
+        <p class="help">Enter P1 → P2 → P3 → P4 around the perimeter. X left/right is your view <strong>facing the radar</strong>: at 0°, +X is left on this plan and −X is right.</p>
+        <div class="corner-grid">
+          <span></span><span class="column-label">X · facing radar</span><span class="column-label">Y · forward</span>
+          <label class="point-label" for="p1-x">P1</label><input id="p1-x" type="number" min="-12" max="12" step="0.1" value="-3" aria-label="P1 X in metres"><input id="p1-y" type="number" min="-12" max="12" step="0.1" value="0" aria-label="P1 Y in metres">
+          <label class="point-label" for="p2-x">P2</label><input id="p2-x" type="number" min="-12" max="12" step="0.1" value="3" aria-label="P2 X in metres"><input id="p2-y" type="number" min="-12" max="12" step="0.1" value="0" aria-label="P2 Y in metres">
+          <label class="point-label" for="p3-x">P3</label><input id="p3-x" type="number" min="-12" max="12" step="0.1" value="2" aria-label="P3 X in metres"><input id="p3-y" type="number" min="-12" max="12" step="0.1" value="5" aria-label="P3 Y in metres">
+          <label class="point-label" for="p4-x">P4</label><input id="p4-x" type="number" min="-12" max="12" step="0.1" value="-2" aria-label="P4 X in metres"><input id="p4-y" type="number" min="-12" max="12" step="0.1" value="5" aria-label="P4 Y in metres">
+        </div>
+        <div id="status" class="status" role="status"></div>
+        <p id="behind" class="help warning" hidden>Some corners are behind the radar (Y &lt; 0).</p>
+      </section>
+      <section class="control-section compact">
+        <div class="section-heading"><span class="step">03</span><h2>Person position</h2><input id="show-person" type="checkbox" checked aria-label="Show person marker"></div>
+        <div class="person-fields"><label for="person-x">X / m · facing radar<input id="person-x" type="number" min="-12" max="12" step="0.1" value="0" aria-label="Person X in metres"></label><label for="person-y">Y / m · forward<input id="person-y" type="number" min="-12" max="12" step="0.1" value="2" aria-label="Person Y in metres"></label></div>
+        <p class="help">Enter your estimated radar coordinates or drag the blue person marker. +Y is forward distance; X uses your view facing the radar.</p>
+        <div id="person-status" class="status person-status" role="status"></div>
+      </section>
+      <section class="control-section compact">
+        <div class="section-heading"><span class="step">04</span><h2>Sector overlay</h2><input id="show-coverage" type="checkbox" checked aria-label="Show illustrative sector overlay"></div>
+        <div class="sector-fields"><label for="distance">Range / m<input id="distance" type="number" min="0.1" max="12" step="0.1" value="6"></label><label for="start-angle">From / °<input id="start-angle" type="number" min="-180" max="180" step="1" value="-60"></label><label for="end-angle">To / °<input id="end-angle" type="number" min="-180" max="180" step="1" value="60"></label></div>
+        <p id="sector-error" class="help warning" hidden></p>
+        <p class="help">0° follows +Y; negative sector angles point toward −X (right on the plan at 0° heading). The overlay is a planning guide, not measured coverage.</p>
+      </section>
+      <div class="actions"><button id="copy" class="primary" type="button">Copy corner parameters</button><button id="reset" type="button">Reset</button></div>
+      <p id="save-note" class="save-note" role="status">Settings are saved in this browser when available.</p>
+    </aside>
+  </main>
+  <footer class="convention"><strong>Radar at (0, 0)</strong><span>Facing the radar: <b class="x-color">−X</b> your left &nbsp; / &nbsp; <b class="x-color">+X</b> your right</span><span><b class="y-color">+Y</b> distance forward from the radar</span><span>Coordinates follow the radar when rotated.</span></footer>
+  <details class="export"><summary>Corner parameters <span>for reference or manual entry</span></summary><p>These are radar coordinates in metres. Plan rotation is only visual and is not included.</p><textarea id="parameters" readonly aria-label="Corner configuration parameters" spellcheck="false"></textarea></details>
+</body>
+</html>

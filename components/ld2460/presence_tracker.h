@@ -87,32 +87,34 @@ class PresenceTracker {
       count = 0;
     if (count > MAX_TRACKS)
       count = MAX_TRACKS;
-    Point accepted[MAX_TRACKS]{};
     bool can_start[MAX_TRACKS]{};
-    uint8_t accepted_count = 0;
     for (uint8_t i = 0; i < count; i++) {
-      const bool inside = !this->zone_enabled_ || TrackingGeometry::contains(this->vertices_, points[i]);
-      // A 20 cm border tolerance is for existing tracks only.
-      if (!inside && !TrackingGeometry::contains(this->vertices_, points[i], 2.0f))
-        continue;
-      accepted[accepted_count] = points[i];
-      can_start[accepted_count++] = inside;
+      can_start[i] = !this->zone_enabled_ || TrackingGeometry::contains(this->vertices_, points[i]);
     }
 
     // Maximum-cardinality, minimum-distance matching avoids the greedy
     // assignment stealing another person's only plausible match.
     Assignment assignment{};
-    this->assign_(accepted, accepted_count, now, 0, 0, 0, 0, assignment);
+    // Match outside reports too: they can identify a tracked departure, but
+    // cannot start or retain a room track. Filtering them first would leave
+    // the person's last inside position counted until its hold expires.
+    this->assign_(points, can_start, count, now, 0, 0, 0, 0, 0, assignment);
     bool matched[MAX_TRACKS]{};
-    for (uint8_t i = 0; i < accepted_count; i++) {
+    for (uint8_t i = 0; i < count; i++) {
       const uint8_t index = assignment.best[i];
       if (index == MAX_TRACKS)
         continue;
-      matched[index] = true;
-      this->observe_(this->tracks_[index], accepted[i], now);
+      if (can_start[i]) {
+        matched[index] = true;
+        this->observe_(this->tracks_[index], points[i], now);
+      } else {
+        // A reported position outside overrides ordinary/stationary holds
+        // and exit-edge selection. The freed slot can accept an arrival.
+        this->tracks_[index] = Track{};
+      }
     }
 
-    for (uint8_t i = 0; i < accepted_count; i++) {
+    for (uint8_t i = 0; i < count; i++) {
       if (assignment.best[i] != MAX_TRACKS || !can_start[i])
         continue;
       uint8_t selected = MAX_TRACKS;
@@ -136,9 +138,9 @@ class PresenceTracker {
         continue;
       auto &track = this->tracks_[selected];
       track = Track{};
-      track.position = accepted[i];
-      track.anchor = accepted[i];
-      track.motion_reference = accepted[i];
+      track.position = points[i];
+      track.anchor = points[i];
+      track.motion_reference = points[i];
       track.first_seen_ms = now;
       track.last_seen_ms = now;
       track.motion_reference_ms = now;
@@ -168,6 +170,7 @@ class PresenceTracker {
   struct Assignment {
     uint8_t current[MAX_TRACKS]{MAX_TRACKS, MAX_TRACKS, MAX_TRACKS, MAX_TRACKS, MAX_TRACKS};
     uint8_t best[MAX_TRACKS]{MAX_TRACKS, MAX_TRACKS, MAX_TRACKS, MAX_TRACKS, MAX_TRACKS};
+    int best_inside_matches{-1};
     int best_matches{-1};
     float best_cost{0};
   };
@@ -181,12 +184,17 @@ class PresenceTracker {
   static constexpr float STATIONARY_RADIUS_DM = 6;
   static constexpr float DIRECTION_THRESHOLD_DM = 2;
 
-  void assign_(const Point *points, uint8_t count, uint32_t now, uint8_t point_index, uint8_t used,
-               int matches, float cost, Assignment &result) const {
-    if (matches + count - point_index < result.best_matches)
+  void assign_(const Point *points, const bool *inside, uint8_t count, uint32_t now, uint8_t point_index, uint8_t used,
+               int inside_matches, int matches, float cost, Assignment &result) const {
+    if (inside_matches + count - point_index < result.best_inside_matches)
       return;
     if (point_index == count) {
-      if (matches > result.best_matches || (matches == result.best_matches && cost < result.best_cost)) {
+      // Preserve plausible inside matches before matching departures, so an
+      // unrelated outside report cannot steal a remaining person's track.
+      if (inside_matches > result.best_inside_matches ||
+          (inside_matches == result.best_inside_matches &&
+           (matches > result.best_matches || (matches == result.best_matches && cost < result.best_cost)))) {
+        result.best_inside_matches = inside_matches;
         result.best_matches = matches;
         result.best_cost = cost;
         for (uint8_t i = 0; i < count; i++)
@@ -206,11 +214,12 @@ class PresenceTracker {
       if (distance > gate)
         continue;
       result.current[point_index] = j;
-      this->assign_(points, count, now, point_index + 1, used | (1U << j), matches + 1,
+      this->assign_(points, inside, count, now, point_index + 1, used | (1U << j),
+                    inside_matches + (inside[point_index] ? 1 : 0), matches + 1,
                     cost + distance * distance, result);
     }
     result.current[point_index] = MAX_TRACKS;
-    this->assign_(points, count, now, point_index + 1, used, matches, cost, result);
+    this->assign_(points, inside, count, now, point_index + 1, used, inside_matches, matches, cost, result);
   }
 
   void observe_(Track &track, Point point, uint32_t now) {
